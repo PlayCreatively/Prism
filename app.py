@@ -8,7 +8,7 @@ fail (for example in isolated test environments), lightweight fallback
 implementations are provided so the app can still start for testing.
 """
 
-from nicegui import ui
+from nicegui import ui, run
 from typing import Dict, List, Any
 import uuid
 import time
@@ -59,15 +59,15 @@ except Exception:  # pragma: no cover - fallback for test environments
         def get_graph(self) -> Dict[str, Any]:
             return {'nodes': list(self.nodes.values()), 'edges': list(self.edges)}
 
-        def add_node(self, label: str, parent_id: str = None, users: List[str] = None):
+        def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True):
             node_id = str(uuid.uuid4())
             self.nodes[node_id] = {
                 'id': node_id,
                 'label': label,
                 'parent_id': parent_id,
-                'status': 'pending',
+                'status': 'accepted' if interested else 'rejected',
                 'metadata': '',
-                'interested_users': users or []
+                'interested_users': (users or []) if interested else []
             }
             if parent_id:
                 self.edges.append({'source': node_id, 'target': parent_id})
@@ -102,6 +102,22 @@ except Exception:  # pragma: no cover - fallback
             except Exception:
                 pass
             return new_node
+
+try:
+    from src.ai_agent import AIAgent
+except Exception:
+    print("Warning: AIAgent could not be imported. AI features disabled.")
+    class AIAgent:
+        def generate_drill_candidates(self, *args, **kwargs):
+            return ["Fallback Idea A", "Fallback Idea B", "Fallback Idea C"]
+
+try:
+    from src.drill_workflow import start_drill_process
+except ImportError:
+    from nicegui import ui
+    async def start_drill_process(*args, **kwargs):
+        ui.notify("Drill workflow module missing.", color='negative')
+
 
 try:
     from src.graph_viz import node_to_echart_node  # optional helper
@@ -347,6 +363,7 @@ def resolve_node_id_from_payload(payload: Dict[str, Any], data_manager: DataMana
 data_manager = DataManager()
 # DrillEngine expects a list of users, not the DataManager instance directly
 drill_engine = DrillEngine(users=['Alex', 'Sasha', 'Alison'])
+ai_agent = AIAgent()
 # We might need to manually inject the data manager if the engine depends on it, 
 # but based on the class def, it manages its own state or needs to be synced.
 # For this integration, we'll sync them manually in the event handlers.
@@ -534,17 +551,14 @@ def main_page():
         refresh_chart_ui()
         show_node_details(node_id)
         
-    def do_drill_action(node_id):
-        try:
-            new_node = drill_engine.drill(node_id)
-            data_manager.save_user(data_manager.load_user(state.get('active_user', 'Alex')))
-        except Exception as e:
-            ui.notify(f"Drill failed: {e}", color='negative')
-            return
-        
-        refresh_chart_ui()
-        if new_node and isinstance(new_node, dict):
-            show_node_details(new_node.get('id'))
+    async def do_drill_action(node_id):
+        await start_drill_process(
+            node_id=node_id,
+            data_manager=data_manager,
+            ai_agent=ai_agent,
+            active_user=state.get('active_user', 'Alex'),
+            on_complete=refresh_chart_ui
+        )
             
     def open_add_dialog():
         with ui.dialog() as dialog, ui.card():
@@ -652,7 +666,7 @@ def main_page():
                         c = user_colors.get(user, 'primary')
                         ui.chip(user, color=c).props('outline size=sm')
 
-            ui.label(f'CONTEXT ({active_user})').classes('text-xs font-bold text-gray-400 mt-4')
+            ui.label(f'{active_user}\'s notes').classes('text-xs font-bold text-gray-400 mt-4')
             metadata_input = ui.textarea(value=display_metadata).props('filled autogrow').classes('w-full text-sm')
             preview = ui.markdown(display_metadata or '_No context yet_').classes('w-full bg-slate-800 rounded p-2 text-sm text-gray-200') # Darker background, lighter text
 
@@ -696,7 +710,13 @@ def main_page():
             # Actions
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
             with ui.grid(columns=2).classes('w-full gap-2'):
-                ui.button('Drill', on_click=lambda: do_drill_action(node_id))
+                # Drill only visible if full consensus (Alex, Sasha, Alison)
+                current_interested = set(generic_node.get('interested_users', []))
+                # Normalize user names to handle case sensitivity if needed, but assuming consistent title case
+                if {'Alex', 'Sasha', 'Alison'}.issubset(current_interested):
+                    ui.button('Drill', on_click=lambda: do_drill_action(node_id))
+                else:
+                     ui.label('') # Spacer
                 
                 # Check active user status
                 if status_label == 'accepted':

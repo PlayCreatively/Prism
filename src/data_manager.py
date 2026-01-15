@@ -187,7 +187,7 @@ class DataManager:
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.write("\n")
 
-    def add_node(self, label: str, parent_id: str = None, users: List[str] = None) -> Dict[str, Any]:
+    def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True) -> Dict[str, Any]:
         """
         Add a new node to the system. 
         It is added to the files of ALL specified users.
@@ -203,7 +203,7 @@ class DataManager:
             'id': node_id,
             'label': label,
             'parent_id': parent_id,
-            'interested': True,  # New Schema
+            'interested': interested,  # New Schema
             'metadata': ''
         }
         
@@ -216,7 +216,8 @@ class DataManager:
         
         # Return the node as it would appear in the graph (with all users)
         result_node = dict(new_node)
-        result_node['interested_users'] = target_users
+        # However, interested_users list only includes those where interested=True
+        result_node['interested_users'] = target_users if interested else []
         return result_node
 
     def get_user_node(self, user_id: str, node_id: str) -> Dict[str, Any]:
