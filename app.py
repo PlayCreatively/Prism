@@ -125,6 +125,11 @@ except ImportError:
     async def start_review_process(*args, **kwargs): pass
     def get_pending_nodes(*args): return []
 
+try:
+    from src.git_manager import GitManager
+except ImportError:
+    print("GitManager missing")
+    GitManager = None
 
 try:
     from src.graph_viz import node_to_echart_node  # optional helper
@@ -416,14 +421,11 @@ def resolve_node_id_from_payload(payload: Dict[str, Any], data_manager: DataMana
     return None
 
 # Initialize core managers
-data_manager = DataManager()
+data_manager = DataManager(data_dir="db/data")
 # DrillEngine expects a list of users, not the DataManager instance directly
 drill_engine = DrillEngine(users=['Alex', 'Sasha', 'Alison'])
 ai_agent = AIAgent()
-# We might need to manually inject the data manager if the engine depends on it, 
-# but based on the class def, it manages its own state or needs to be synced.
-# For this integration, we'll sync them manually in the event handlers.
-
+git_manager = GitManager(repo_path="db") if GitManager else None
 
 # Load data at startup
 try:
@@ -468,6 +470,60 @@ def main_page():
         'node_positions': {},
         'last_selection_time': 0
     }
+
+    # --- Git State & Logic ---
+    git_btn_ref = {}
+
+    async def check_git_status():
+        if not git_manager: return
+        btn = git_btn_ref.get('btn')
+        if not btn: return
+        
+        user = state['active_user']
+        try:
+            # Check in background
+            start_check = time.time()
+            has_changes = await run.io_bound(git_manager.has_changes, user)
+            if has_changes:
+                btn.classes(remove='hidden')
+            else:
+                btn.classes(add='hidden')
+        except Exception as e:
+            print(f"Git check error: {e}")
+
+    async def do_git_push():
+        if not git_manager: return
+        user = state['active_user']
+        ui.notify(f'Pushing changes for {user}...', position='bottom-right')
+        try:
+             await run.io_bound(git_manager.push_changes_for_user, user)
+             ui.notify('Synced to remote.', type='positive', position='bottom-right')
+             await check_git_status()
+        except Exception as e:
+             ui.notify(f'Push failed: {e}', type='negative', position='bottom-right')
+
+    async def auto_pull():
+        if not git_manager: return
+        
+        # Health Check
+        health = await run.io_bound(git_manager.validate_setup)
+        if not health['ok']:
+            for issue in health['issues']:
+                ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
+            return
+
+        try:
+             await run.io_bound(git_manager.pull_rebase)
+             ui.notify('Git: Pulled latest changes.', type='positive', position='bottom-right')
+             refresh_chart_ui()
+        except Exception as e:
+             # This often happens if no upstream is configured or network is down
+             print(f"Git auto-pull failed: {e}")
+
+    # Run pull on load (once)
+    ui.timer(0.1, auto_pull, once=True)
+    # Check status periodically
+    ui.timer(5.0, check_git_status)
 
     def run_layout(force_reset=False):
         if not nx: return
@@ -607,6 +663,9 @@ def main_page():
                 interested = (status == 'accepted')
                 data_manager.update_user_node(user, node_id, interested=interested)
                 ui.notify(f"{user} voted {status.upper()}", type='positive' if interested else 'negative')
+            
+            # Trigger git status check
+            ui.timer(0.5, check_git_status, once=True)
 
         except Exception as e:
             ui.notify(f"Error updating vote: {e}", color='negative')
@@ -644,6 +703,7 @@ def main_page():
                 users = [u.strip() for u in input_users.value.split(',') if u.strip()]
                 newn = data_manager.add_node(label=label, parent_id=pid, users=users)
                 # data_manager.add_node already saves
+                ui.timer(0.5, check_git_status, once=True)
                 refresh_chart_ui()
                 dialog.close()
                 show_node_details(newn.get('id'))
@@ -674,6 +734,9 @@ def main_page():
                 data_manager.update_shared_node(node_id, **shared_upd)
             if user_upd:
                 data_manager.update_user_node(active_user, node_id, **user_upd)
+            
+            # Trigger git status check
+            ui.timer(0.5, check_git_status, once=True)
                 
         except Exception as exc:
             print(f"Error updating node {node_id}: {exc}")
@@ -849,6 +912,11 @@ def main_page():
         ).props('dense outlined').classes('w-32')
         user_select.on('update:model-value', lambda e: set_active_user(user_select.value))
         
+        # Git Push Button (Context sensitive)
+        with ui.button(on_click=do_git_push).props('flat dense color=accent icon=cloud_upload').classes('hidden') as btn:
+            btn.tooltip('Push local changes')
+            git_btn_ref['btn'] = btn
+
         # --- Global Controls ---
         ui.separator().props('vertical')
         
