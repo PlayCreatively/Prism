@@ -118,6 +118,13 @@ except ImportError:
     async def start_drill_process(*args, **kwargs):
         ui.notify("Drill workflow module missing.", color='negative')
 
+try:
+    from src.review_workflow import start_review_process, get_pending_nodes
+except ImportError:
+    print("Review workflow missing")
+    async def start_review_process(*args, **kwargs): pass
+    def get_pending_nodes(*args): return []
+
 
 try:
     from src.graph_viz import node_to_echart_node  # optional helper
@@ -125,24 +132,13 @@ except Exception:
     # We'll build our own conversion below if helper not present.
     node_to_echart_node = None
 
-# Helper: compute color from interested_users list
-def color_from_users(users: List[str]) -> str:
-    # Map user presence to RGB-ish colors per project documentation
-    # Alex -> Red, Sasha -> Green, Alison -> Blue
-    r = 255 if 'Alex' in users else 0
-    g = 255 if 'Sasha' in users else 0
-    b = 255 if 'Alison' in users else 0
-    # If none selected, return light gray
-    if r == g == b == 0:
-        return '#d0d0d0'
-    return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba
 
 # Build ECharts options from internal graph
-def build_echart_options(graph: Dict[str, Any], active_user: str = None, positions: Dict[str, Any] = None) -> Dict[str, Any]:
+def build_echart_options(graph: Dict[str, Any], active_user: str = None, positions: Dict[str, Any] = None, show_dead: bool = False, all_users_view: bool = False) -> Dict[str, Any]:
     nodes = graph.get('nodes', [])
     edges = graph.get('edges', [])
-    filter_user = (active_user or '').strip().lower()
-    highlight_user = filter_user if filter_user and filter_user != 'all' else None
+    active_user = (active_user or '').strip()
 
     e_nodes = []
     node_map = {}
@@ -156,29 +152,78 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
         nid = n.get('id')
         label = n.get('label') or nid
         users = n.get('interested_users', [])
-        normalized_users = [str(u).strip().lower() for u in users if isinstance(u, str)]
-        color = color_from_users(users)
-        size = 20 + (5 * len(users)) # Increased base size
+        rejected = n.get('rejected_users', [])
+        
+        # --- State Logic ---
+        is_dead = len(users) == 0
+        
+        # Dead Node Rule
+        if is_dead and not show_dead:
+            continue
 
-        # Style
-        symbol = 'circle'
-        item_style = {'color': color, 'borderColor': 'transparent', 'borderWidth': 0}
+        if not all_users_view:
+            # Hide nodes rejected by valid active user (unless showing dead/hidden)
+            if active_user in rejected and not show_dead:
+                continue
+
+        color = color_from_users(users)
+        base_size = 20 + (5 * len(users))
+        
+        # Default Style
+        opacity = 1.0
+        border_type = 'solid'
+        border_width = 0
+        border_color = 'transparent'
+        
+        if not all_users_view:
+            # Apply Active User Context Rules
+            has_rejections = len(rejected) > 0
+            is_interested = active_user in users
+            
+            if has_rejections:
+                # Deprioritized: Anyone rejected it
+                # We use darkening instead of opacity to avoid additive transparency artifacts
+                color = darken_hex(color, 0.7) 
+                base_size = base_size * 0.6
+            elif not is_interested and not is_dead:
+                # Pending: No rejections, Active User hasn't voted (isn't in interested)
+                # Visual: Thick Yellow Dashed Border
+                border_width = 4
+                border_color = '#FFFF00' 
+                
+        # Scaling
+        size = base_size
+        
+        # Style Object
+        item_style = {
+            'color': color, 
+            'opacity': opacity,
+            'borderColor': border_color, 
+            'borderWidth': border_width
+        }
+        
+        # Store computed opacity in node_map for edge gradient usage later
+        node_map[nid]['_computed_opacity'] = opacity
+        node_map[nid]['_computed_color'] = color
+        
         label_cfg = {
             'show': True,
             'formatter': label,
             'fontSize': 14,
             'fontWeight': 'bold',
             'position': 'inside',
-            'color': color,
+            'color': '#888888' if has_rejections else color,
             'textBorderColor': '#312e2a',
             'textBorderWidth': 6
         }
 
-        # Root Node Logic
+        # Root Node Logic (Overrrides)
         is_root = label == "Thesis Idea"
         if is_root:
             item_style['borderColor'] = '#ffd700'
             item_style['borderWidth'] = 5
+            item_style['borderType'] = 'solid'
+            item_style['opacity'] = 1.0
             size = 60
             label_cfg['fontSize'] = 18
 
@@ -186,7 +231,7 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
             'id': nid,
             'name': nid, 
             'value': label,
-            'symbol': symbol,
+            'symbol': 'circle',
             'symbolSize': size,
             'itemStyle': item_style,
             'label': label_cfg,
@@ -196,12 +241,10 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
         
         # Inject Layout Positions
         if positions and nid in positions:
-            # Map -1..1 to pixels. ECharts coord system center is 0,0? No, top-left.
-            # We map to a reasonable canvas size (e.g. 1000x800)
             px, py = positions[nid]
             e_node['x'] = (px * 500) 
             e_node['y'] = (py * 350)
-            e_node['fixed'] = True # Ensure they stay put
+            e_node['fixed'] = True
             
         e_nodes.append(e_node)
 
@@ -276,16 +319,29 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
                     gy = 0 if sy < ty else 1
                     gy2 = 1 if sy < ty else 0
             
-            # Reconstruct colors (need to fetch original hex since we are building gradient manually)
-            c_source = color_from_users(list(s_node.get('interested_users', [])))
-            c_target = color_from_users(list(t_node.get('interested_users', [])))
+            # Reconstruct colors/opacity for gradient
+            # We use the cached values from the node loop to ensure edge opacity matches node state
+            c_source = s_node.get('_computed_color', color_from_users(list(s_node.get('interested_users', []))))
+            c_target = t_node.get('_computed_color', color_from_users(list(t_node.get('interested_users', []))))
+            
+            op_source = s_node.get('_computed_opacity', 1.0)
+            op_target = t_node.get('_computed_opacity', 1.0)
+            
+            # Use RGBA for precise gradient opacity interpolation
+            rgba_source = hex_to_rgba(c_source, op_source)
+            rgba_target = hex_to_rgba(c_target, op_target)
+            
+            # Reset global opacity to 1.0 (defaults usually 1), handle alpha in color stops
+            line_style['opacity'] = 1.0
             
             line_style['color'] = {
                 'type': 'linear',
                 'x': gx, 'y': gy, 'x2': gx2, 'y2': gy2,
                 'colorStops': [
-                    {'offset': 0, 'color': c_source},
-                    {'offset': 1, 'color': c_target}
+                    {'offset': 0, 'color': rgba_source},
+                    {'offset': 0.1, 'color': rgba_source},
+                    {'offset': 0.9, 'color': rgba_target},
+                    {'offset': 1, 'color': rgba_target}
                 ],
                 'global': False
             }
@@ -407,6 +463,8 @@ def main_page():
         'details_container': None,
         'last_graph_hash': 0,
         'active_user': 'Alex',
+        'show_dead': False,
+        'all_users_view': False,
         'node_positions': {},
         'last_selection_time': 0
     }
@@ -446,7 +504,13 @@ def main_page():
         # Ensure layout exists
         if nx and not state.get('node_positions'):
             run_layout()
-        return build_echart_options(graph, state.get('active_user'), state.get('node_positions'))
+        return build_echart_options(
+            graph, 
+            state.get('active_user'), 
+            state.get('node_positions'),
+            show_dead=state.get('show_dead', False),
+            all_users_view=state.get('all_users_view', False)
+        )
 
     def refresh_chart_ui():
         # Update layout if new nodes appear
@@ -458,6 +522,15 @@ def main_page():
             # Valid update
             state['chart'].options.update(options)
             state['chart'].update()
+            
+        # Update Pending Badge
+        if state.get('pending_badge_ui'):
+            try:
+                count = len(get_pending_nodes(data_manager, state.get('active_user', 'Alex')))
+                state['pending_badge_ui'].text = str(count)
+                state['pending_badge_ui'].set_visibility(count > 0)
+            except Exception:
+                pass
 
     # Auto-refresh loop
     def auto_refresh_check():
@@ -521,35 +594,33 @@ def main_page():
             reset_selection()
     
     
-    def toggle_interest(node_id, user="Alex"):
+    def set_vote(node_id, status, user="Alex"):
         """
-        Toggles the vote of 'user' on the node.
-        If user 'Accept', interested -> True.
-        If user 'Reject', interested -> False.
+        Sets the vote status for a user.
+        status: 'accepted' | 'rejected' | 'maybe'
         """
         try:
-            # Look up current state to know which way to toggle
-            user_node = data_manager.get_user_node(user, node_id)
-            
-            new_interest = True
-            
-            if user_node:
-                current_interest = user_node.get('interested', True) # Default to true if missing
-                if current_interest is True:
-                    new_interest = False
-                else:
-                    new_interest = True
-            
-            status_text = "Accepted" if new_interest else "Rejected"
-            ui.notify(f"User {user} set status to {status_text}")
-            data_manager.update_user_node(user, node_id, interested=new_interest)
-                    
+            if status == 'maybe':
+                data_manager.remove_user_node(user, node_id)
+                ui.notify(f"{user} reset vote (Maybe)", type='info')
+            else:
+                interested = (status == 'accepted')
+                data_manager.update_user_node(user, node_id, interested=interested)
+                ui.notify(f"{user} voted {status.upper()}", type='positive' if interested else 'negative')
+
         except Exception as e:
-            ui.notify(f"Error updating interest: {e}", color='negative')
+            ui.notify(f"Error updating vote: {e}", color='negative')
             pass
             
         refresh_chart_ui()
         show_node_details(node_id)
+    
+    
+    def toggle_interest(node_id, user="Alex"):
+        """Deprecated: Use set_vote instead"""
+        # ... logic preserved if any legacy calls remain, but redirecting to set_vote is safer
+        # For now, implemented as compatibility wrapper if clicked blindly
+        pass
         
     async def do_drill_action(node_id):
         await start_drill_process(
@@ -656,15 +727,31 @@ def main_page():
             ui.label('DETAILS').classes('text-xs font-bold text-gray-400 mt-2')
             label_input = ui.input('Label', value=display_label).classes('w-full')
 
-            interested_users = generic_node.get('interested_users', [])
-            if interested_users:
-                with ui.row().classes('gap-1 flex-wrap text-xs text-gray-400'):
-                    ui.label('Interested:').classes('text-xs text-gray-400')
-                    # Map users to project colors
-                    user_colors = {'Alex': 'red', 'Sasha': 'green', 'Alison': 'blue'}
-                    for user in interested_users:
-                        c = user_colors.get(user, 'primary')
-                        ui.chip(user, color=c).props('outline size=sm')
+            ui.label('Status').classes('text-xs font-bold text-gray-400 mt-2')
+            with ui.row().classes('gap-1 flex-wrap'):
+                interested_set = set(generic_node.get('interested_users', []))
+                rejected_set = set(generic_node.get('rejected_users', []))
+                
+                # User-specific text color classes (Tailwind)
+                user_text_colors = {
+                    'Alex': 'text-red-400', 
+                    'Sasha': 'text-green-400', 
+                    'Alison': 'text-blue-400'
+                }
+
+                for user in ['Alex', 'Sasha', 'Alison']:
+                    txt_cls = user_text_colors.get(user, '')
+                    
+                    if user in interested_set:
+                        with ui.chip(icon='check', color='green').props('outline size=sm'):
+                            ui.label(user).classes(txt_cls)
+                    elif user in rejected_set:
+                        with ui.chip(icon='close', color='red').props('outline size=sm'):
+                            ui.label(user).classes(txt_cls)
+                    else:
+                        # Grayed out / Question mark
+                        with ui.chip(icon='help_outline', color='grey').props('outline size=sm').classes('opacity-40'):
+                             ui.label(user).classes('') # No specific user color for pending/gray state
 
             ui.label(f'{active_user}\'s notes').classes('text-xs font-bold text-gray-400 mt-4')
             metadata_input = ui.textarea(value=display_metadata).props('filled autogrow').classes('w-full text-sm')
@@ -709,25 +796,27 @@ def main_page():
 
             # Actions
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
-            with ui.grid(columns=2).classes('w-full gap-2'):
+            with ui.row().classes('w-full gap-2 justify-between'):
                 # Drill only visible if full consensus (Alex, Sasha, Alison)
                 current_interested = set(generic_node.get('interested_users', []))
-                # Normalize user names to handle case sensitivity if needed, but assuming consistent title case
-                if {'Alex', 'Sasha', 'Alison'}.issubset(current_interested):
-                    ui.button('Drill', on_click=lambda: do_drill_action(node_id))
-                else:
-                     ui.label('') # Spacer
                 
-                # Check active user status
-                if status_label == 'accepted':
-                     # If accepted, offer to Reject
-                     ui.button('Reject', on_click=lambda: toggle_interest(node_id, active_user), color='red')
-                elif status_label == 'rejected':
-                     # If rejected, offer to Accept (Re-evaluate)
-                     ui.button('Accept', on_click=lambda: toggle_interest(node_id, active_user), color='green')
-                else:
-                     # Pending -> Accept
-                     ui.button('Accept', on_click=lambda: toggle_interest(node_id, active_user), color='green')
+                # Consensus Drill Button
+                if {'Alex', 'Sasha', 'Alison'}.issubset(current_interested):
+                    ui.button('Drill', on_click=lambda: do_drill_action(node_id)).props('icon=hub')
+                
+                # Voting Controls (Tri-state)
+                # Determine current state for visual highlighting
+                if not user_node:
+                    curr_vote = 'maybe'
+                elif user_node.get('interested', True):
+                    curr_vote = 'accepted'
+                else: 
+                    curr_vote = 'rejected'
+
+                with ui.button_group():
+                    ui.button(on_click=lambda: set_vote(node_id, 'accepted', active_user), icon='check').props(f'flat {"color=green" if curr_vote == "accepted" else "text-color=grey"}')
+                    ui.button(on_click=lambda: set_vote(node_id, 'maybe', active_user), icon='help_outline').props(f'flat {"color=blue" if curr_vote == "maybe" else "text-color=grey"}')
+                    ui.button(on_click=lambda: set_vote(node_id, 'rejected', active_user), icon='close').props(f'flat {"color=red" if curr_vote == "rejected" else "text-color=grey"}')
 
     # --- Layout Construction ---
 
@@ -760,6 +849,33 @@ def main_page():
         ).props('dense outlined').classes('w-32')
         user_select.on('update:model-value', lambda e: set_active_user(user_select.value))
         
+        # --- Global Controls ---
+        ui.separator().props('vertical')
+        
+        # Review Pending Button (Placeholder for now)
+        async def do_review():
+             await start_review_process(
+                 data_manager, 
+                 state.get('active_user', 'Alex'), 
+                 on_complete=refresh_chart_ui
+             )
+
+        with ui.button(on_click=do_review).props('flat dense color=warning icon=checklist').tooltip('Review Pending Keys'):
+             state['pending_badge_ui'] = ui.badge('0', color='red').props('floating').classes('text-xs') # Placeholder count
+
+        # Toggles
+        with ui.row().classes('gap-1'):
+            def toggle_dead(e):
+                state['show_dead'] = e.value
+                refresh_chart_ui()
+            
+            def toggle_all(e):
+                state['all_users_view'] = e.value
+                refresh_chart_ui()
+
+            ui.switch('Dead', value=state['show_dead'], on_change=toggle_dead).props('dense color=grey').tooltip('Show/Hide Dead Nodes')
+            ui.switch('God', value=state['all_users_view'], on_change=toggle_all).props('dense color=blue').tooltip('All Users View (God Mode)')
+
         # Layout Reset control
         if nx:
              ui.button(icon='grid_goldenratio', on_click=lambda: (run_layout(force_reset=True), refresh_chart_ui())).props('flat round dense color=grey').tooltip('Reset Graph Layout')

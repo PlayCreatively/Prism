@@ -65,6 +65,7 @@ class DataManager:
                             # We create a shallow copy to modify interested_users dynamically
                             node_copy = dict(node)
                             node_copy['interested_users'] = [] # Clear this, we build it now
+                            node_copy['rejected_users'] = []   # Track rejections
                             all_nodes[nid] = node_copy
                             
                             # Clean up old checks
@@ -81,6 +82,10 @@ class DataManager:
                         if is_interested:
                             if user_id not in all_nodes[nid]['interested_users']:
                                 all_nodes[nid]['interested_users'].append(user_id)
+                        else:
+                            # Explicit rejection
+                            if user_id not in all_nodes[nid]['rejected_users']:
+                                all_nodes[nid]['rejected_users'].append(user_id)
                                 
             except Exception:
                 continue
@@ -269,6 +274,20 @@ class DataManager:
                  pass
 
         self.save_user(user_data)
+
+    def remove_user_node(self, user_id: str, node_id: str) -> None:
+        """
+        Remove a node from a specific user's file.
+        This effectively "unvotes" or "resets" the user's state on this node to Pending.
+        """
+        user_data = self.load_user(user_id)
+        original_count = len(user_data.get('nodes', []))
+        
+        # Filter out the node
+        user_data['nodes'] = [n for n in user_data.get('nodes', []) if n.get('id') != node_id]
+        
+        if len(user_data['nodes']) < original_count:
+            self.save_user(user_data)
 
     def update_shared_node(self, node_id: str, **kwargs) -> None:
         """
