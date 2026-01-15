@@ -18,6 +18,9 @@ try:
 except ImportError:
     nx = None
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Attempt to import real project modules; provide minimal fallbacks if missing.
 try:
     from src.data_manager import DataManager
