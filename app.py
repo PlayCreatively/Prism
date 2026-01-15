@@ -213,8 +213,7 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
         seen_pairs.add(pair)
 
         # Check for Consensus Path (Edge between two white/full-consensus nodes)
-        # Use pairs to be consistent with direction of edge for gradient
-        src_id, tgt_id = pair
+        src_id, tgt_id = s, t
         s_node = node_map[src_id]
         t_node = node_map[tgt_id]
         
@@ -223,22 +222,9 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
         
         is_consensus_edge = CONSENSUS_SET.issubset(s_users) and CONSENSUS_SET.issubset(t_users)
         
-        # Calculate colors for gradient
-        c_source = color_from_users(list(s_users))
-        c_target = color_from_users(list(t_users))
-
         # Determine Style
         line_style = {
             'curveness': 0,
-            'color': {
-                'type': 'linear',
-                'x': 0, 'y': 0, 'x2': 1, 'y2': 0,
-                'colorStops': [
-                    {'offset': 0, 'color': c_target},
-                    {'offset': 1, 'color': c_source}
-                ],
-                'global': False
-            },
             'opacity': 0.8
         }
 
@@ -247,11 +233,52 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
             line_style.update({
                 'width': 6, 
                 'opacity': 1.0,
-                'color': '#ffffff' # Override gradient for pure white consensus
+                'color': '#ffffff' # Consensus white
             })
         else:
             # Standard transition
-            line_style['width'] = 4 # Slightly thicker to see gradient
+            line_style['width'] = 4
+            
+            # Default to manual gradient calculation based on positions
+            # 'source-target' can produce black edges in some setups, causing "wrong colors".
+            # To fix "inconsistent order", we must use node positions to orient the gradient.
+            
+            # Default coordinates (Left -> Right)
+            gx, gy, gx2, gy2 = 0, 0, 1, 0
+            
+            if positions:
+                # Retrieve coordinates to determine relative direction
+                # positions maps id -> [x, y]
+                s_pos = positions.get(src_id)
+                t_pos = positions.get(tgt_id)
+                
+                if s_pos is not None and t_pos is not None:
+                    sx, sy = s_pos
+                    tx, ty = t_pos
+                    
+                    # Logic: In ECharts gradient relative coords (0..1), 
+                    # 0 is Min(x/y) (Left/Top), 1 is Max(x/y) (Right/Bottom).
+                    # If sx < tx (Left->Right): start=0, end=1
+                    # If sx > tx (Right->Left): start=1, end=0
+                    gx = 0 if sx < tx else 1
+                    gx2 = 1 if sx < tx else 0
+                    
+                    gy = 0 if sy < ty else 1
+                    gy2 = 1 if sy < ty else 0
+            
+            # Reconstruct colors (need to fetch original hex since we are building gradient manually)
+            c_source = color_from_users(list(s_node.get('interested_users', [])))
+            c_target = color_from_users(list(t_node.get('interested_users', [])))
+            
+            line_style['color'] = {
+                'type': 'linear',
+                'x': gx, 'y': gy, 'x2': gx2, 'y2': gy2,
+                'colorStops': [
+                    {'offset': 0, 'color': c_source},
+                    {'offset': 1, 'color': c_target}
+                ],
+                'global': False
+            }
 
         e_links.append({
             'source': src_id, 
