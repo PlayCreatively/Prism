@@ -69,11 +69,24 @@ async def start_review_process(
                 # Card Body
                 ui.label(node.get('label', 'Untitled')).classes('text-xl font-bold text-white')
                 
-                # Metadata (Context)
-                meta = node.get('metadata', '')
-                if meta:
-                    ui.markdown(meta).classes('w-full bg-slate-800 p-2 rounded text-sm text-gray-300 max-h-40 overflow-y-auto')
-                else:
+                # Metadata (Context) - Aggregate from all users
+                ui.label('Context / Notes:').classes('text-xs font-bold text-gray-400 mt-2')
+                
+                # We want to see notes from everyone who has this node
+                # Since we don't have a direct "all_users_with_node" list easily without querying, 
+                # we'll query the known set of users.
+                has_notes = False
+                all_users = data_manager.list_users()
+                with ui.column().classes('w-full gap-2'):
+                    for user in all_users:
+                        user_node = data_manager.get_user_node(user, node.get('id'))
+                        if user_node and user_node.get('metadata'):
+                            has_notes = True
+                            with ui.column().classes('w-full bg-slate-800 p-2 rounded'):
+                                ui.label(f"{user}:").classes('text-xs font-bold text-gray-400')
+                                ui.markdown(user_node.get('metadata')).classes('text-sm text-gray-300 max-h-40 overflow-y-auto')
+                
+                if not has_notes:
                     ui.label('No context provided.').classes('text-sm text-gray-500 italic')
                 
                 # Proponents

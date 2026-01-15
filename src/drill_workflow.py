@@ -22,12 +22,22 @@ async def start_drill_process(
         cnode = next((n for n in graph.get('nodes', []) if n['id'] == cid), None)
         if cnode: existing_children.append(cnode.get('label'))
 
+    # Gather metadata from ALL users to give AI full context
+    combined_notes = []
+    all_users = data_manager.list_users()
+    for user in all_users:
+        u_node = data_manager.get_user_node(user, node_id)
+        if u_node and u_node.get('metadata'):
+            combined_notes.append(f"[{user}]: {u_node['metadata']}")
+    
+    full_context_str = "\n".join(combined_notes) if combined_notes else ""
+
     # 2. Call AI (IO Bound)
     try:
         candidates = await run.io_bound(
             ai_agent.generate_drill_candidates,
             node.get('label', ''),
-            node.get('metadata', ''),
+            full_context_str,
             existing_children
         )
     except Exception as e:

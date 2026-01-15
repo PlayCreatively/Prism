@@ -29,6 +29,10 @@ class DataManager:
             "nodes": [],
         }
 
+    def list_users(self) -> List[str]:
+        """Returns a list of all user IDs based on JSON files in the data directory."""
+        return sorted([f.stem for f in self.data_dir.glob("*.json")])
+
     def get_graph(self) -> Dict[str, Any]:
         """
         Aggregates all user files into a single graph representation.
