@@ -158,12 +158,6 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
             'textBorderWidth': 6
         }
 
-        # if highlight_user and highlight_user in normalized_users:
-        #     item_style['borderColor'] = '#111111'
-        #     item_style['borderWidth'] = 3
-        #     item_style['shadowBlur'] = 15
-        #     item_style['shadowColor'] = color
-
         # Root Node Logic
         is_root = label == "Thesis Idea"
         if is_root:
@@ -480,13 +474,11 @@ def main_page():
             container.clear()
 
     def handle_chart_click(event):
-        print(f"DEBUG: Click event received: {event}")
         node_id = None
 
         # Normalize NiceGUI event payloads: they can be dicts or a list of requested fields.
         raw_payload = event.args if hasattr(event, 'args') else event
         payload = normalize_click_payload(raw_payload)
-        print(f"DEBUG: Parsed Payload: {payload}")
 
         try:
             node_id = resolve_node_id_from_payload(payload, data_manager)
@@ -495,7 +487,6 @@ def main_page():
             pass
 
         if node_id:
-            print(f"Device found node_id: {node_id}")
             state['last_selection_time'] = time.time()
             state['selected_node_id'] = node_id
             if state.get('context_card'):
@@ -546,10 +537,6 @@ def main_page():
     def do_drill_action(node_id):
         try:
             new_node = drill_engine.drill(node_id)
-            # drill_engine needs to know about the distributed nature?
-            # For now, let's assume drill returns a new node structure and we save it.
-            # The mocked drill engine just adds a node. 
-            # Real drill engine usage might need refactoring but is outside current scope.
             data_manager.save_user(data_manager.load_user(state.get('active_user', 'Alex')))
         except Exception as e:
             ui.notify(f"Drill failed: {e}", color='negative')
@@ -632,8 +619,6 @@ def main_page():
         # If user_node exists, check 'interested' boolean.
         
         is_interested = user_node.get('interested', True) if user_node else True 
-        # Note: In new schema, if we have the node, 'interested' dictates status.
-        # But wait, if user rejects, interested=False.
         
         if not user_node:
              status_label = "pending"
@@ -675,15 +660,38 @@ def main_page():
                 content = metadata_input.value or ''
                 preview.set_content(content or '_No context yet_')
 
-            metadata_input.on('input', lambda e: sync_preview())
+            # --- Auto-Save Logic ---
+            _save_timer = None
+            save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')
 
-            def save_details():
-                new_label = label_input.value.strip() or display_label
-                persist_node_changes(node_id, label=new_label, metadata=metadata_input.value)
+            def execute_autoresave():
+                new_label = label_input.value or ''
+                final_label = new_label.strip()
+                if not final_label:
+                    final_label = display_label
+                
+                persist_node_changes(node_id, label=final_label, metadata=metadata_input.value)
                 refresh_chart_ui()
-                show_node_details(node_id)
+                
+                # Update status
+                save_status.text = 'Saved changes.'
+                # Clear message
+                ui.timer(2.0, lambda: setattr(save_status, 'text', ''), once=True)
 
-            ui.button('Save Details', on_click=lambda e: save_details(), color='primary').classes('w-full mt-2')
+            def schedule_save(e=None):
+                nonlocal _save_timer
+                save_status.text = 'Typing...'
+                if _save_timer:
+                    _save_timer.cancel()
+                # Schedule save
+                _save_timer = ui.timer(1.0, execute_autoresave, once=True)
+
+            # Bind to on_value_change (throttle is built-in option but we want custom debounce)
+            # 'input' event fires on every keystroke for input/textarea
+            # IMPORTANT: We must accept the 'e' argument in lambda, even if unused, 
+            # because on_value_change passes an event object.
+            metadata_input.on_value_change(lambda e: (sync_preview(), schedule_save(e)))
+            label_input.on_value_change(lambda e: schedule_save(e))
 
             # Actions
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
@@ -750,10 +758,6 @@ def main_page():
         ui.separator()
         state['details_container'] = ui.column().classes('w-full gap-3')
         # Empty init
-
-
-    # Timer removed temporarily
-    # ui.timer(2.0, auto_refresh_check)
 
 
 if __name__ in {"__main__", "__mp_main__"}:
