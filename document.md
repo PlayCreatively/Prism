@@ -50,13 +50,13 @@ Each user's file contains a flat list of every node they have interacted with, p
       "id": "uuid_v4", // Random UUID. Labels must be unique across the graph.
       "label": "Serious Games",
       "parent_id": "root_node_id", 
-      "status": "accepted", // Options: "accepted" (Yes), "rejected" (No), "pending"
+      "interested": true, // Boolean: true (accepted), false (rejected)
       "metadata": "**Markdown** notes allowed here..."
     }
   ]
 }
 ```
-*Note: Rejected ideas are simply nodes with `status: "rejected"`. This provides a permanent distributed history of bad ideas.*
+*Note: Rejected ideas are nodes with `interested: false`. Pending ideas are simply nodes that do not yet exist in the user's file.*
 
 ### 3.2 Collaboration & Git Automations
 The tool handles Git operations semi-automatically to ensure users are always looking at the latest map.

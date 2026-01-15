@@ -1,0 +1,66 @@
+[
+  {
+    "id": "RW-001",
+    "title": "Scaffold Project Structure & Environment (NiceGUI)",
+    "description": "Initialize the project directory. 1. Create `requirements.txt` with `nicegui`, `networkx`, `graphviz`, `pytest`. 2. Create a basic `app.py` that imports nicegui and prints `PRISM System Online`.",
+    "context": "Reference `Implementation Stack` in document.md.",
+    "completion_promise": "pip install -r requirements.txt && python -c \"import nicegui; import networkx; import graphviz; assert True\"",
+    "status": "completed"
+  },
+  {
+    "id": "RW-002",
+    "title": "Implement User-Partitioned Data Schema",
+    "description": "Create `src/data_manager.py`. Implement `DataManager` class to load/save `data/{user}.json`. ALSO CREATE `tests/test_data_manager.py` to verify it.",
+    "context": "See Section 3.1 of document.md. Schema must include `user_id`, `applied_mutations` (list), and `nodes` (list).",
+    "completion_promise": "python -m pytest tests/test_data_manager.py",
+    "status": "completed"
+  },
+  {
+    "id": "RW-003",
+    "title": "Implement Mutation Ledger System",
+    "description": "Create `src/mutation_manager.py`. Logic to write/read mutations in `mutations/`. ALSO CREATE `tests/test_mutations.py` to verify applying mutations (Create/Update/Delete) to the data state.",
+    "context": "See Section 3.3 `Data Mutation Strategy`.",
+    "completion_promise": "python -m pytest tests/test_mutations.py",
+    "status": "completed"
+  },
+  {
+    "id": "RW-004",
+    "title": "Develop RGB Graph Renderer (ECharts)",
+    "description": "Update `src/graph_viz.py`. Implement `GraphVisualizer` with NetworkX to generate ECharts configuration compatible with NiceGUI. Update `tests/test_graph_viz.py` to verify ECharts output format.",
+    "context": "See Section 2 `Core Visual Logic` and Section 6 `Implementation Stack`.",
+    "completion_promise": "python -m pytest tests/test_graph_viz.py",
+    "status": "completed"
+  },
+  {
+    "id": "RW-005",
+    "title": "Implement Floating Context Window Logic (NiceGUI)",
+    "description": "Update `src/ui_components.py` with functions to generate UI state for NiceGUI. Update `tests/test_ui_struct.py`.",
+    "context": "See Section 5 `User Interface Specifications`.",
+    "completion_promise": "python -m pytest tests/test_ui_struct.py",
+    "status": "completed"
+  },
+  {
+    "id": "RW-006",
+    "title": "Implement Drill Down Logic (Backlog & Tri-State)",
+    "description": "Create `src/drill_engine.py`. Implement the Backlog/Tri-State voting logic. Create `tests/test_drill_logic.py` to verify state transitions (Accepted/Rejected/Ignored).",
+    "context": "See Section 4 `Workflow B`.",
+    "completion_promise": "python -m pytest tests/test_drill_logic.py",
+    "status": "completed"
+  },
+  {
+    "id": "RW-007",
+    "title": "Git Automation Hooks",
+    "description": "Create `src/git_manager.py`. Implement `GitManager` class. Create `tests/test_git_manager.py` that mocks subprocess calls to verify correct git commands are issued.",
+    "context": "See Section 3.2.",
+    "completion_promise": "python -m pytest tests/test_git_manager.py",
+    "status": "completed"
+  },
+  {
+    "id": "RW-008",
+    "title": "Integrate Main Application Logic (NiceGUI)",
+    "description": "Refactor `app.py` to use NiceGUI. Integrate `DataManager` and `DrillEngine`. Use `ui.echart` for visualization and `ui.card`/`ui.row` for interactions.",
+    "context": "Combine `src.data_manager`, `src.drill_engine`, `src.graph_viz`, `src.ui_components` into the NiceGUI app.",
+    "completion_promise": "python -c \"import os; assert os.path.exists('app.py') and os.path.getsize('app.py') > 100\"",
+    "status": "completed"
+  }
+]

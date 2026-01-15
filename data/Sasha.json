@@ -1,0 +1,34 @@
+{
+  "user_id": "Sasha",
+  "applied_mutations": [],
+  "nodes": [
+    {
+      "id": "527504f2-e2a0-45f5-b39c-fc4831f908cc",
+      "label": "Human-Computer Interaction",
+      "parent_id": "7a55f689-be12-4727-aaaf-2c5fa44bbe25",
+      "metadata": "",
+      "interested": true
+    },
+    {
+      "id": "7a55f689-be12-4727-aaaf-2c5fa44bbe25",
+      "label": "Thesis Idea",
+      "parent_id": null,
+      "metadata": "",
+      "interested": true
+    },
+    {
+      "id": "7f6f82b2-cd65-4b9a-88e8-ec863eee1461",
+      "label": "ML for Creativity",
+      "parent_id": "7a55f689-be12-4727-aaaf-2c5fa44bbe25",
+      "metadata": "",
+      "interested": true
+    },
+    {
+      "id": "7c582608-c2ab-40a3-9424-a6b502b47934",
+      "label": "Generative Art Tools",
+      "parent_id": "7f6f82b2-cd65-4b9a-88e8-ec863eee1461",
+      "metadata": "",
+      "interested": true
+    }
+  ]
+}
