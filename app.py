@@ -8,7 +8,7 @@ fail (for example in isolated test environments), lightweight fallback
 implementations are provided so the app can still start for testing.
 """
 
-from nicegui import ui, run
+from nicegui import ui, run, app
 from typing import Dict, List, Any
 import uuid
 import time
@@ -467,11 +467,13 @@ def main_page():
         'chart': None,
         'details_container': None,
         'last_graph_hash': 0,
-        'active_user': 'Alex',
-        'show_dead': False,
-        'all_users_view': False,
+        'active_user': app.storage.user.get('active_user', 'Alex'),
+        'show_dead': app.storage.user.get('show_dead', False),
+        'all_users_view': app.storage.user.get('all_users_view', False),
         'node_positions': {},
-        'last_selection_time': 0
+        'last_selection_time': 0,
+        'temperature': app.storage.user.get('temperature', 0.7),
+        'test_mode': app.storage.user.get('test_mode', False)
     }
 
     # --- Git State & Logic ---
@@ -500,32 +502,53 @@ def main_page():
         ui.notify(f'Pushing changes for {user}...', position='bottom-right')
         try:
              await run.io_bound(git_manager.push_changes_for_user, user)
-             ui.notify('Synced to remote.', type='positive', position='bottom-right')
+             ui.notify('Published to team!', type='positive', position='bottom-right')
              await check_git_status()
         except Exception as e:
              ui.notify(f'Push failed: {e}', type='negative', position='bottom-right')
 
-    async def auto_pull():
+    async def auto_pull(verbose=False):
         if not git_manager: return
         
         # Health Check
         health = await run.io_bound(git_manager.validate_setup)
         if not health['ok']:
-            for issue in health['issues']:
-                ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
+            # Silent return on repeated failures to avoid spam, 
+            # or just log it to console
+            # for issue in health['issues']:
+            #     ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
             return
 
         try:
-             await run.io_bound(git_manager.pull_rebase)
-             ui.notify('Git: Pulled latest changes.', type='positive', position='bottom-right')
-             refresh_chart_ui()
+             result = await run.io_bound(git_manager.pull_rebase)
+             
+             # Case 1: Pull failed appropriately (e.g. no remote), effectively "up to date" locally
+             if result is None:
+                 if verbose:
+                      ui.notify('Git: Local only (no upstream)', position='bottom-right', color='grey')
+                 return
+
+             # Case 2: Standard execution
+             if result.stdout:
+                 # Check for various "up to date" messages
+                 # "Already up to date." or "Current branch ... is up to date."
+                 output = result.stdout.lower()
+                 if 'up to date' not in output:
+                     ui.notify('Git: Incoming changes applied.', type='positive', position='bottom-right')
+                     refresh_chart_ui()
+                 elif verbose:
+                     ui.notify('Git: Up to date', position='bottom-right', color='positive')
+             
         except Exception as e:
              # This often happens if no upstream is configured or network is down
+             # We suppress this in the loop to avoid spamming the user
              print(f"Git auto-pull failed: {e}")
 
-    # Run pull on load (once)
-    ui.timer(0.1, auto_pull, once=True)
-    # Check status periodically
+    # Run pull on load (immediately)
+    ui.timer(0.1, lambda: auto_pull(verbose=True), once=True)
+    # Run pull loop (every 10s)
+    ui.timer(10.0, lambda: auto_pull(verbose=False))
+    # Check local status (for Publish button) periodically
     ui.timer(5.0, check_git_status)
 
     def run_layout(force_reset=False):
@@ -611,6 +634,7 @@ def main_page():
     def set_active_user(user: str):
         # Default to Alex if something goes wrong, never allow 'All'
         state['active_user'] = user or 'Alex'
+        app.storage.user['active_user'] = state['active_user']
         refresh_chart_ui()
 
     def reset_selection():
@@ -690,7 +714,8 @@ def main_page():
             data_manager=data_manager,
             ai_agent=ai_agent,
             active_user=state.get('active_user', 'Alex'),
-            on_complete=refresh_chart_ui
+            on_complete=refresh_chart_ui,
+            temperature=state.get('temperature', 0.7)
         )
             
     def open_add_dialog():
@@ -867,7 +892,7 @@ def main_page():
                 current_interested = set(generic_node.get('interested_users', []))
                 
                 # Consensus Drill Button
-                if {'Alex', 'Sasha', 'Alison'}.issubset(current_interested):
+                if state.get('test_mode') or {'Alex', 'Sasha', 'Alison'}.issubset(current_interested):
                     ui.button('Drill', on_click=lambda: do_drill_action(node_id)).props('icon=hub')
                 
                 # Voting Controls (Tri-state)
@@ -935,17 +960,35 @@ def main_page():
              state['pending_badge_ui'] = ui.badge('0', color='red').props('floating').classes('text-xs') # Placeholder count
 
         # Toggles
-        with ui.row().classes('gap-1'):
+        with ui.row().classes('gap-1 items-center'):
             def toggle_dead(e):
                 state['show_dead'] = e.value
+                app.storage.user['show_dead'] = e.value
                 refresh_chart_ui()
             
             def toggle_all(e):
                 state['all_users_view'] = e.value
+                app.storage.user['all_users_view'] = e.value
                 refresh_chart_ui()
+
+            def toggle_test(e):
+                state['test_mode'] = e.value
+                app.storage.user['test_mode'] = e.value
+                # Refresh details if open, to show/hide Drill button
+                if state['selected_node_id']:
+                    show_node_details(state['selected_node_id'])
+            
+            def update_temp(e):
+                state['temperature'] = e.value
+                app.storage.user['temperature'] = e.value
 
             ui.switch('Dead', value=state['show_dead'], on_change=toggle_dead).props('dense color=grey').tooltip('Show/Hide Dead Nodes')
             ui.switch('God', value=state['all_users_view'], on_change=toggle_all).props('dense color=blue').tooltip('All Users View (God Mode)')
+            ui.switch('Test', value=state['test_mode'], on_change=toggle_test).props('dense color=orange').tooltip('Enable Test Mode (Always Drill)')
+            
+            with ui.row().classes('items-center gap-1'):
+                ui.label('Temp:').classes('text-xs text-gray-400')
+                ui.number(value=state['temperature'], min=0.0, max=2.0, step=0.1, on_change=update_temp).props('dense outlined style="width: 60px"').tooltip('AI Temperature')
 
         # Layout Reset control
         if nx:
@@ -968,5 +1011,5 @@ def main_page():
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    ui.run(title='PRISM', port=8081, reload=True)
+    ui.run(title='PRISM', port=8081, reload=True, storage_secret='prism_secret_key_123')
 

@@ -6,7 +6,8 @@ async def start_drill_process(
     data_manager: Any,
     ai_agent: Any,
     active_user: str,
-    on_complete: Callable[[], None]
+    on_complete: Callable[[], None],
+    temperature: float = 1.0
 ):
     ui.notify("Consulting AI...", timeout=2000)
     
@@ -38,7 +39,8 @@ async def start_drill_process(
             ai_agent.generate_drill_candidates,
             node.get('label', ''),
             full_context_str,
-            existing_children
+            existing_children,
+            temperature
         )
     except Exception as e:
         ui.notify(f"AI Error: {e}", color='negative')

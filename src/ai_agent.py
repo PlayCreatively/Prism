@@ -12,7 +12,7 @@ class AIAgent:
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
 
-    def generate_drill_candidates(self, label, metadata, existing_children):
+    def generate_drill_candidates(self, label, metadata, existing_children, temperature=1.0):
         try:
             template = self._load_prompt('drill_down.txt')
             prompt = template.format(
@@ -23,6 +23,7 @@ class AIAgent:
 
             response = self.client.chat.completions.create(
                 model="gpt-4o",
+                temperature=temperature,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant emitting JSON."},
                     {"role": "user", "content": prompt}

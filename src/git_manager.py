@@ -39,9 +39,35 @@ class GitManager:
 
     def pull_rebase(self):
         """
-        Perform `git pull --rebase`.
+        Perform `git pull --rebase`. 
+        If it fails due to missing upstream configuration, attempts to configure it and retry.
         """
-        return self._run(['git', 'pull', '--rebase'])
+        try:
+            return self._run(['git', 'pull', '--rebase'])
+        except subprocess.CalledProcessError as e:
+            # 128 often means "No tracking information"
+            if e.returncode == 128:
+                try:
+                    # Try to auto-configure upstream
+                    # 1. Get current branch
+                    res = self._run(['git', 'branch', '--show-current'])
+                    branch = res.stdout.strip()
+                    
+                    if branch:
+                        # 2. Fetch origin to ensure we know about remote branches
+                        self._run(['git', 'fetch', 'origin'])
+                        
+                        # 3. Set upstream
+                        self._run(['git', 'branch', '--set-upstream-to', f'origin/{branch}', branch])
+                        
+                        # 4. Retry pull
+                        return self._run(['git', 'pull', '--rebase'])
+                except Exception:
+                    # If any of the recovery steps fail (e.g. remote branch doesn't exist yet),
+                    # we suppress the original error so that 'push' can attempt to create the remote branch.
+                    pass
+                return None
+            raise e
 
     def add_all(self):
         """
@@ -57,17 +83,39 @@ class GitManager:
 
     def push(self):
         """
-        Perform `git push`.
+        Perform `git push`. Attempts to set upstream if generic push fails.
         """
-        return self._run(['git', 'push'])
+        try:
+            return self._run(['git', 'push'])
+        except subprocess.CalledProcessError:
+            # Fallback: Try setting upstream for the current branch
+            try:
+                res = self._run(['git', 'branch', '--show-current'])
+                branch = res.stdout.strip()
+                if branch:
+                    return self._run(['git', 'push', '-u', 'origin', branch])
+            except Exception:
+                pass
+            # If fallback fails, re-raise the original error (or let the caller handle failure)
+            raise
 
     def has_changes(self, user: str) -> bool:
         """
-        Check if there are any uncommitted changes relevant to the user.
-        This includes:
-        1. Modifications to data/{user}.json
-        2. New files in mutations/
+        Check if there are any uncommitted changes relevant to the user,
+        OR if there are any unpushed committed changes.
         """
+        # 1. Check for unpushed commits (Generic)
+        try:
+            # check against tracked upstream
+            # 'git cherry' lists commits that are not in upstream
+            res = self._run(['git', 'cherry', '-v'])
+            if res.stdout and res.stdout.strip():
+                return True
+        except subprocess.CalledProcessError:
+            # Fails if no upstream is configured, which is expected in some new repos
+            pass
+
+        # 2. Check for uncommitted changes (User specific)
         # git status --porcelain gives a clean parsable output
         res = self._run(['git', 'status', '--porcelain'])
         if res.stdout:
@@ -108,15 +156,18 @@ class GitManager:
         Stage user-specific changes, commit, and push.
         """
         self.stage_user_changes(user)
-        # Check if anything was actually staged? git commit will fail if empty, which is fine to catch or handle
+        
+        # Try to commit. If empty, it throws CalledProcessError, which we ignore (nothing to commit).
         try:
             self.commit(f'Update by {user}')
-            self.pull_rebase()
-            self.push()
-            return True
         except subprocess.CalledProcessError:
-            # Likely nothing to commit
-            return False
+            pass
+
+        # Pull and Push MUST succeed. If they fail, we want the error to propagate
+        # so the UI can report it (instead of silently returning False).
+        self.pull_rebase()
+        self.push()
+        return True
 
     def push_changes(self, user: str):
         """
