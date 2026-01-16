@@ -54,3 +54,72 @@ def render_tri_state_buttons(
         
         # Init
         update_visuals(current_state)
+
+
+def render_editable_notes(
+    text: str,
+    on_change: Callable[[str], None],
+    label: str = "Notes",
+    editable: bool = True,
+    placeholder: str = "_No context yet_",
+    max_height_class: str = "max-h-60"
+):
+    """
+    Renders a markdown note area.
+    If editable=True, clicking switches to a textarea editor.
+    Includes scrolling for long content in both modes.
+    """
+    
+    # Header
+    if label:
+        ui.label(label).classes('text-xs font-bold text-gray-400 mt-4')
+    
+    # 1. Preview (Markdown) - Wrapper for scrolling
+    # We use a wrapper column to handle the toggle logic cleanly
+    container = ui.column().classes('w-full').style('gap: 0;')
+    
+    with container:
+        # Preview Mode
+        # Note: 'cursor-pointer' implies interactivity, so only show if editable.
+        # Custom styling for markdown headers within the note
+        preview_classes = (
+            f'w-full bg-slate-800 rounded p-2 text-sm text-gray-200 {max_height_class} overflow-y-auto '
+            f'{"cursor-pointer hover:bg-slate-700 transition-colors" if editable else ""} '
+            '[&_h1]:text-lg [&_h1]:mt-0 [&_h1]:pt-0 [&_h1]:mb-2 [&_h1]:font-bold'
+        )
+        
+        display_text = text if text and text.strip() else placeholder
+        preview = ui.markdown(display_text).classes(preview_classes)
+
+        # Editor Mode (only if editable)
+        if editable:
+            # Init as hidden
+            editor = ui.textarea(value=text).props('filled rows=8').classes(f'w-full text-sm {max_height_class} overflow-y-auto hidden')
+            
+            def show_editor():
+                preview.set_visibility(False)
+                editor.set_visibility(True)
+                editor.classes(remove='hidden') # visibility helper might not be enough for textarea props sometimes, ensures consistency
+                editor.run_method('focus')
+
+            def hide_editor():
+                editor.set_visibility(False)
+                editor.classes(add='hidden')
+                preview.set_visibility(True)
+                
+                # Update Preview
+                new_text = editor.value or ''
+                preview.set_content(new_text if new_text.strip() else placeholder)
+                
+                # Verify change
+                if new_text != text: # Simple check, but caller handles actual diff
+                    on_change(new_text)
+
+            # Bindings
+            preview.on('click', show_editor)
+            editor.on('blur', hide_editor)
+            
+            # Trigger on_change while typing to support auto-save/debounce
+            editor.on_value_change(lambda e: on_change(e.value))
+
+

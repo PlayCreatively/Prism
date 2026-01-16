@@ -1,6 +1,47 @@
 from nicegui import ui, run
-from typing import Dict, List, Any, Callable
+from typing import Dict, List, Any, Callable, Tuple
 from src.ui_common import render_tri_state_buttons
+
+def build_ancestry_chain(node_id: str, graph: Dict[str, Any]) -> str:
+    """Build full ancestry chain from root to current node (e.g., 'game design → minimalism → functional minimalism')"""
+    nodes_by_id = {n['id']: n for n in graph.get('nodes', [])}
+    edges_by_target = {e['target']: e['source'] for e in graph.get('edges', [])}
+    
+    chain = []
+    current_id = node_id
+    while current_id in nodes_by_id:
+        node = nodes_by_id[current_id]
+        chain.insert(0, node.get('label', 'Untitled'))
+        current_id = edges_by_target.get(current_id)
+        if not current_id:
+            break
+    
+    return " → ".join(chain)
+
+def separate_approved_rejected(
+    children_ids: List[str], 
+    graph: Dict[str, Any], 
+    data_manager: Any, 
+    active_user: str
+) -> Tuple[List[str], List[str]]:
+    """Separate children into approved (interested: true) and rejected (interested: false)"""
+    approved = []
+    rejected = []
+    
+    for cid in children_ids:
+        cnode = next((n for n in graph.get('nodes', []) if n['id'] == cid), None)
+        if not cnode:
+            continue
+        
+        # Get the active user's stance on this child
+        u_node = data_manager.get_user_node(active_user, cid)
+        if u_node and u_node.get('interested') is False:
+            rejected.append(cnode.get('label', 'Untitled'))
+        else:
+            # If interested is True or missing (not yet voted), treat as approved
+            approved.append(cnode.get('label', 'Untitled'))
+    
+    return approved, rejected
 
 async def start_drill_process(
     node_id: str,
@@ -20,40 +61,59 @@ async def start_drill_process(
         ui.notify("Consulting AI...", timeout=2000)
     
     # 1. Gather Context
-    graph = data_manager.get_graph()
-    node = next((n for n in graph.get('nodes', []) if n['id'] == node_id), None)
-    if not node: 
-        if container: on_complete()
-        return
-    
-    # Get existing children for dedup
-    children_ids = [e['target'] for e in graph.get('edges', []) if e['source'] == node_id]
-    existing_children = []
-    for cid in children_ids:
-        cnode = next((n for n in graph.get('nodes', []) if n['id'] == cid), None)
-        if cnode: existing_children.append(cnode.get('label'))
+    try:
+        graph = data_manager.get_graph()
+        node = next((n for n in graph.get('nodes', []) if n['id'] == node_id), None)
+        if not node: 
+            ui.notify("Node not found", color='negative')
+            if container: on_complete()
+            return
+        
+        # Build full ancestry chain for context
+        full_ancestry = build_ancestry_chain(node_id, graph)
+        
+        # Get existing children and separate into approved/rejected
+        children_ids = [e['target'] for e in graph.get('edges', []) if e['source'] == node_id]
+        approved_children, rejected_children = separate_approved_rejected(children_ids, graph, data_manager, active_user)
 
-    # Gather metadata from ALL users to give AI full context
-    combined_notes = []
-    all_users = data_manager.list_users()
-    for user in all_users:
-        u_node = data_manager.get_user_node(user, node_id)
-        if u_node and u_node.get('metadata'):
-            combined_notes.append(f"[{user}]: {u_node['metadata']}")
-    
-    full_context_str = "\n".join(combined_notes) if combined_notes else ""
+        # Gather metadata from ALL users to give AI full context
+        combined_notes = []
+        all_users = data_manager.list_users()
+        for user in all_users:
+            u_node = data_manager.get_user_node(user, node_id)
+            if u_node and u_node.get('metadata'):
+                combined_notes.append(f"[{user}]: {u_node['metadata']}")
+        
+        full_context_str = "\n".join(combined_notes) if combined_notes else ""
+    except Exception as e:
+        ui.notify(f"Context Error: {e}", color='negative')
+        print(f"Drill context gathering error: {e}")
+        if container:
+             container.clear()
+             with container:
+                  ui.label(f"Context Error: {e}").classes('text-red-500')
+                  ui.button('Back', on_click=on_complete).props('flat')
+        return
 
     # 2. Call AI (IO Bound)
     try:
+        print(f"Calling AI with ancestry: {full_ancestry}")
+        print(f"Approved: {approved_children}")
+        print(f"Rejected: {rejected_children}")
         candidates = await run.io_bound(
             ai_agent.generate_drill_candidates,
-            node.get('label', ''),
+            full_ancestry,
             full_context_str,
-            existing_children,
+            approved_children,
+            rejected_children,
             temperature
         )
+        print(f"AI returned {len(candidates) if candidates else 0} candidates")
     except Exception as e:
         ui.notify(f"AI Error: {e}", color='negative')
+        print(f"AI Error Details: {e}")
+        import traceback
+        traceback.print_exc()
         if container:
              container.clear()
              with container:

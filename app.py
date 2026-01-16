@@ -21,6 +21,26 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv()
 
+# Global Styles
+ui.add_head_html('''
+    <style>
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569; /* slate-600 */
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155; /* slate-700 */
+        }
+    </style>
+''', shared=True)
+
 # Attempt to import real project modules; provide minimal fallbacks if missing.
 try:
     from src.data_manager import DataManager
@@ -141,7 +161,8 @@ except Exception:
     node_to_echart_node = None
 
 from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba
-from src.ui_common import render_tri_state_buttons
+from src.ui_common import render_tri_state_buttons, render_editable_notes
+
 
 # Build ECharts options from internal graph
 def build_echart_options(graph: Dict[str, Any], active_user: str = None, positions: Dict[str, Any] = None, show_dead: bool = False, all_users_view: bool = False) -> Dict[str, Any]:
@@ -845,25 +866,20 @@ def main_page():
                         with ui.chip(icon='help_outline', color='grey').props('outline size=sm').classes('opacity-40'):
                              ui.label(user).classes('') # No specific user color for pending/gray state
 
-            ui.label(f'{active_user}\'s notes').classes('text-xs font-bold text-gray-400 mt-4')
-            metadata_input = ui.textarea(value=display_metadata).props('filled autogrow').classes('w-full text-sm')
-            preview = ui.markdown(display_metadata or '_No context yet_').classes('w-full bg-slate-800 rounded p-2 text-sm text-gray-200') # Darker background, lighter text
-
-            def sync_preview():
-                content = metadata_input.value or ''
-                preview.set_content(content or '_No context yet_')
+            # Local state for metadata since we use an external component
+            current_metadata = display_metadata
 
             # --- Auto-Save Logic ---
             _save_timer = None
-            save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')
 
             def execute_autoresave():
+                nonlocal current_metadata
                 new_label = label_input.value or ''
                 final_label = new_label.strip()
                 if not final_label:
                     final_label = display_label
                 
-                persist_node_changes(node_id, label=final_label, metadata=metadata_input.value)
+                persist_node_changes(node_id, label=final_label, metadata=current_metadata)
                 refresh_chart_ui()
                 
                 # Update status
@@ -879,12 +895,25 @@ def main_page():
                 # Schedule save
                 _save_timer = ui.timer(1.0, execute_autoresave, once=True)
 
+            def update_metadata(val):
+                nonlocal current_metadata
+                current_metadata = val
+                schedule_save()
+
+            render_editable_notes(
+                text=display_metadata,
+                on_change=update_metadata,
+                label=f'{active_user}\'s notes',
+                editable=True
+            )
+            
+            save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')
             # Bind to on_value_change (throttle is built-in option but we want custom debounce)
             # 'input' event fires on every keystroke for input/textarea
             # IMPORTANT: We must accept the 'e' argument in lambda, even if unused, 
             # because on_value_change passes an event object.
-            metadata_input.on_value_change(lambda e: (sync_preview(), schedule_save(e)))
             label_input.on_value_change(lambda e: schedule_save(e))
+
 
             # Actions
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
@@ -1003,14 +1032,15 @@ def main_page():
     state['context_card'].set_visibility(False)
     
     with state['context_card']:
-        with ui.row().classes('w-full items-center justify-between'):
-            ui.label('Context Window').classes('text-lg font-bold text-gray-100')
-            with ui.row().classes('gap-1'):
-                 ui.button(icon='close', on_click=reset_selection).props('flat round dense color=grey').tooltip('Close')
-        
-        ui.separator()
-        state['details_container'] = ui.column().classes('w-full gap-3')
-        # Empty init
+        with ui.element('div').classes('w-full h-full flex flex-col gap-4'):
+            with ui.row().classes('w-full items-center justify-between'):
+                ui.label('Context Window').classes('text-lg font-bold text-gray-100')
+                with ui.row().classes('gap-1'):
+                     ui.button(icon='close', on_click=reset_selection).props('flat round dense color=grey').tooltip('Close')
+            
+            ui.separator()
+            state['details_container'] = ui.column().classes('w-full gap-3')
+            # Empty init
 
 
 if __name__ in {"__main__", "__mp_main__"}:

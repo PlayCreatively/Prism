@@ -1,5 +1,7 @@
 from nicegui import ui
 from typing import Callable, Any, List, Dict
+from src.ui_common import render_editable_notes
+
 
 def get_pending_nodes(data_manager: Any, active_user: str) -> List[Dict]:
     """
@@ -82,9 +84,14 @@ async def start_review_process(
                         user_node = data_manager.get_user_node(user, node.get('id'))
                         if user_node and user_node.get('metadata'):
                             has_notes = True
-                            with ui.column().classes('w-full bg-slate-800 p-2 rounded'):
-                                ui.label(f"{user}:").classes('text-xs font-bold text-gray-400')
-                                ui.markdown(user_node.get('metadata')).classes('text-sm text-gray-300 max-h-40 overflow-y-auto')
+                            # Use reusable component in read-only mode
+                            render_editable_notes(
+                                text=user_node.get('metadata'),
+                                on_change=lambda _: None,
+                                label=f"{user}:",
+                                editable=False,
+                                max_height_class='max-h-40'
+                            )
                 
                 if not has_notes:
                     ui.label('No context provided.').classes('text-sm text-gray-500 italic')
