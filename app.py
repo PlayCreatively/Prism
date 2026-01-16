@@ -141,6 +141,7 @@ except Exception:
     node_to_echart_node = None
 
 from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba
+from src.ui_common import render_tri_state_buttons
 
 # Build ECharts options from internal graph
 def build_echart_options(graph: Dict[str, Any], active_user: str = None, positions: Dict[str, Any] = None, show_dead: bool = False, all_users_view: bool = False) -> Dict[str, Any]:
@@ -904,10 +905,12 @@ def main_page():
                 else: 
                     curr_vote = 'rejected'
 
-                with ui.button_group():
-                    ui.button(on_click=lambda: set_vote(node_id, 'accepted', active_user), icon='check').props(f'flat {"color=green" if curr_vote == "accepted" else "text-color=grey"}')
-                    ui.button(on_click=lambda: set_vote(node_id, 'maybe', active_user), icon='help_outline').props(f'flat {"color=blue" if curr_vote == "maybe" else "text-color=grey"}')
-                    ui.button(on_click=lambda: set_vote(node_id, 'rejected', active_user), icon='close').props(f'flat {"color=red" if curr_vote == "rejected" else "text-color=grey"}')
+
+
+                render_tri_state_buttons(
+                    curr_vote,
+                    lambda action: set_vote(node_id, action, active_user)
+                )
 
     # --- Layout Construction ---
 
