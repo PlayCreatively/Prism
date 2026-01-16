@@ -62,31 +62,48 @@ The visual language extends beyond consensus color to reflect the Active User's 
 
 ## 3. System Architecture
 
-### 3.1 Data Persistence (User-Partitioned Storage)
-To prevent Git merge conflicts and allow for full data portability, the system does not use a single shared database. Instead, each user has their own dedicated JSON file (e.g., `data/alex.json`, `data/sasha.json`).
+### 3.1 Data Persistence (Hybrid Relational Model)
+The system uses a normalized data architecture to separate **Graph Structure** (Global Truth) from **User State** (Individual Context). This eliminates the need for complex distributed conflict resolution while maintaining user autonomy.
 
-*   **Runtime Aggregation:** On startup, the system reads all JSON files in the `data/` directory and merges them into a single in-memory graph.
-*   **Conflict Avoidance & Write Access:** While data is partitioned by user for consensus tracking (`data/alex.json`, `data/sasha.json`), the **application instance has write-access to all local data files**. This allows for bulk imports (Ingestion Workflow) and synchronized updates. However, during standard consensus operations, users primarily append to their own file to minimize Git conflicts.
-*   **Data Resilience:** By storing the full node definition with every vote, the system ensures that if a user leaves (deletes their file), the nodes they created **survive** if anyone else has voted "Yes" on them.
-
-**Node Schema (Unified):**
-Each user's file contains a flat list of every node they have interacted with, plus a log of mutations they have already applied.
-```json
-{
-  "user_id": "Alex",
-  "applied_mutations": ["hash_1", "hash_2"], // The "Cursor" linking State to Git History
-  "nodes": [
+**1. The Global Graph (`db/global.json`)**
+The "Single Source of Truth" for the topology of the idea map.
+*   **Scope:** Shared by all users.
+*   **Content:** Defines *what* exists and how it connects.
+*   **Schema:**
+    ```json
     {
-      "id": "uuid_v4", // Random UUID. Labels must be unique across the graph.
-      "label": "Serious Games",
-      "parent_id": "root_node_id", 
-      "interested": true, // Boolean: true (accepted), false (rejected)
-      "metadata": "**Markdown** notes allowed here..."
+      "nodes": {
+        "uuid_v4": {
+          "id": "uuid_v4",
+          "label": "Serious Games",
+          "parent_id": "root_uuid" 
+        }
+      }
     }
-  ]
-}
-```
-*Note: Rejected ideas are nodes with `interested: false`. Pending ideas are simply nodes that do not yet exist in the user's file.*
+    ```
+
+**2. User State Files (`db/data/{user}.json`)**
+Stores the specific relationship between a user and the nodes.
+*   **Scope:** One file per user (e.g., `Alex.json`, `Sasha.json`).
+*   **Content:** "Votes", Metadata, and Interest flags.
+*   **Schema:**
+    ```json
+    {
+      "user_id": "Alex",
+      "nodes": {
+        "uuid_v4": {
+          "interested": true,       // Vote: True (Accept), False (Reject), Missing (Pending)
+          "metadata": "My notes..." // Private/Public context
+        }
+      }
+    }
+    ```
+
+**3. Runtime Composition**
+On startup or refresh, the system performs a **Join Operation**:
+`Graph = Global Nodes + (join) All User Files`
+*   **Interested Users List:** derived dynamically by checking which users have `interested: true` for a given UUID.
+*   **Pending Status:** derived if a Node exists in Global but is missing from the Active User's file.
 
 ### 3.2 Collaboration & Git Automations
 The tool handles Git operations semi-automatically to ensure users are always looking at the latest map.
@@ -96,45 +113,21 @@ The tool handles Git operations semi-automatically to ensure users are always lo
     *   *Conflict:* The system alerts the user to resolve conflicts manually in the terminal/VS Code (rare, given the file separation).
 2.  **Edit & Push:** Users work locally.
 3.  **Post-Session Prompt:** After a "Drilling Session" is marked complete, the tool prompts: *"You have made changes. Push to team?"*
-    *   If confirmed, the tool runs `git add .`, `git commit -m "Update by [User]"`, and `git push`.
 
-### 3.3 Data Mutation Strategy (The "Change Ledger")
-Since nodes are duplicated across multiple user files for resilience, we need a way to propagate edits (Context 1: "I fixed a typo") and deletions (Context 2: "We all agreed to delete this").
+### 3.3 Atomic Updates & Synchronization
+By separating structure from state, synchronization conflicts are minimized.
 
-**The Approach:**
-We use a **Command-Based Mutation Ledger** instead of relying purely on state merging. This is similar to a database transaction log or Redux actions.
+*   **Structural Edits (Rename/Move):** Update `global.json`. Since this is a single file, standard Git merge logic handles resolution if two people rename the same node simultaneously.
+*   **State Edits (Vote/Note):** Update `user.json`. Since users only write to their own file, **Merge Conflicts are impossible** for voting operations.
+*   **The "Mutation Ledger":** (Deprecated) The previous complex event-sourcing ledger has been removed in favor of this normalized architecture.
 
-**Mechanism:**
-1.  **The `mutations/` Directory:** A folder tracked by Git.
-2.  **Action:** When a user modifies a shared node (Rename/Delete), the system does **not** assume the other users will see it instantly. It generates a mutation file:
-    ```json
-    // mutations/2026-01-14T1200_alex_rename_uuid.json
-    {
-      "timestamp": "2026-01-14T12:00:00Z",
-      "author": "Alex",
-      "node_id": "uuid_of_node",
-      "action": "UPDATE_LABEL", // or "DELETE_NODE"
-      "payload": "New Label Name"
-    }
-    ```
-3.  **Propagation:**
-    *   User A creates the mutation and pushes.
-    *   User B pulls.
-    *   User B's client detects a new file in `mutations/`.
-    *   **The Patching Process:** The client reads the mutation and *applies* the change to `sasha.json` (e.g., updating the label text or removing the node entry).
-    *   *Result:* `sasha.json` stays self-contained and up-to-date.
+### 3.4 Portability & Templating (Import/Export)
+The system supports converting the complex UUID-bound graph into generic Project Templates.
 
-**Addressing Edge Cases (The "State-Linked" Cursor):**
-To ensure the system works seamlessly with Git history (branch switching, resets):
-*   **Mechanism:** We do *not* use a local untracked log. Instead, the list of `applied_mutations` is stored **inside** each `user.json` file.
-*   **Why this is better:**
-    *   **Git Switch/Checkout:** If you switch to an old branch, your `user.json` reverts to its old state (without the mutation applied) AND the `mutations/` folder reverts (removing the mutation file). The system sees a perfect match; nothing breaks.
-    *   **Git Reset:** If you hard reset to yesterday, your data file and your mutation history move backward in lockstep.
-    *   **Git Revert:** To undo a mutation, you revert the commit that added it *and* the commit that updated your `user.json`. The system then sees the mutation effectively "never happened."
-
-**Pros of this Approach:**
-*   **Deletes work correctly:** Without a specific "Delete Command," if Alex deletes a node but Sasha has it, merging the two files would normally just make the node reappear (The "Zombie Node" problem). The Change File explicitly tells Sasha's computer "Remove this."
-*   **Conflict Resolution:** If two people rename the same node, the `timestamp` determines the "Last Write Wins" winner mathematically.
+*   **Export to Template:** Converts the Graph into a **Label Tree** (Nested JSON structure), stripping all UUIDs and User Data.
+    *   *Result:* A clean, shareable file representing just the ideas hierarchy.
+*   **Import from Template:** Ingests a Label Tree, generates **Fresh UUIDs**, and seeds a new `global.json`.
+    *   *Use Case:* "Cloning" a successful brainstorming structure to start a new project with a clean slate.
 
 ---
 
