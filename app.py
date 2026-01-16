@@ -257,16 +257,23 @@ def build_echart_options(graph: Dict[str, Any], active_user: str = None, positio
             size = 60
             label_cfg['fontSize'] = 18
 
+        # Store description for tooltip
+        description = n.get('description', '')
+        tooltip_text = label
+        if description:
+            tooltip_text += f"<br/><span style='color:#999;font-size:11px'>{description}</span>"
+        
         e_node = {
             'id': nid,
             'name': nid, 
             'value': label,
+            'description': description,  # Store for reference
             'symbol': 'circle',
             'symbolSize': size,
             'itemStyle': item_style,
             'label': label_cfg,
             'draggable': True,
-            'tooltip': {'formatter': '{c}'}
+            'tooltip': {'formatter': tooltip_text}
         }
         
         # Inject Layout Positions
@@ -764,7 +771,7 @@ def main_page():
     def persist_node_changes(node_id: str, **changes):
         """
         Persist changes. 
-        - Label/Parent changes are shared (update_shared_node).
+        - Label/Parent/Description changes are shared (update_shared_node).
         - Metadata/Interested are per-user (update_user_node).
         """
         active_user = state.get('active_user', 'Alex')
@@ -774,7 +781,7 @@ def main_page():
         user_upd = {}
         
         for k, v in changes.items():
-            if k in ['label', 'parent_id']:
+            if k in ['label', 'parent_id', 'description']:
                 shared_upd[k] = v
             elif k in ['metadata', 'interested']:
                 user_upd[k] = v
@@ -839,6 +846,10 @@ def main_page():
 
             ui.label('DETAILS').classes('text-xs font-bold text-gray-400 mt-2')
             label_input = ui.input('Label', value=display_label).classes('w-full')
+            
+            # Description (shared across all users)
+            description_input = ui.textarea('Description', value=generic_node.get('description', '')).classes('w-full')
+            description_input.props('outlined rows=3')
 
             ui.label('Status').classes('text-xs font-bold text-gray-400 mt-2')
             with ui.row().classes('gap-1 flex-wrap'):
@@ -879,7 +890,9 @@ def main_page():
                 if not final_label:
                     final_label = display_label
                 
-                persist_node_changes(node_id, label=final_label, metadata=current_metadata)
+                new_description = description_input.value or ''
+                
+                persist_node_changes(node_id, label=final_label, description=new_description, metadata=current_metadata)
                 refresh_chart_ui()
                 
                 # Update status
@@ -913,6 +926,7 @@ def main_page():
             # IMPORTANT: We must accept the 'e' argument in lambda, even if unused, 
             # because on_value_change passes an event object.
             label_input.on_value_change(lambda e: schedule_save(e))
+            description_input.on_value_change(lambda e: schedule_save(e))
 
 
             # Actions

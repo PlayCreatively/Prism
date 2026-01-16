@@ -72,6 +72,9 @@ async def start_drill_process(
         # Build full ancestry chain for context
         full_ancestry = build_ancestry_chain(node_id, graph)
         
+        # Get node description
+        node_description = node.get('description', '')
+        
         # Get existing children and separate into approved/rejected
         children_ids = [e['target'] for e in graph.get('edges', []) if e['source'] == node_id]
         approved_children, rejected_children = separate_approved_rejected(children_ids, graph, data_manager, active_user)
@@ -98,6 +101,7 @@ async def start_drill_process(
     # 2. Call AI (IO Bound)
     try:
         print(f"Calling AI with ancestry: {full_ancestry}")
+        print(f"Description: {node_description}")
         print(f"Approved: {approved_children}")
         print(f"Rejected: {rejected_children}")
         candidates = await run.io_bound(
@@ -106,6 +110,7 @@ async def start_drill_process(
             full_context_str,
             approved_children,
             rejected_children,
+            node_description,
             temperature
         )
         print(f"AI returned {len(candidates) if candidates else 0} candidates")
@@ -131,32 +136,57 @@ async def start_drill_process(
         return
 
     # 3. Present UI
-    # Default to 'maybe' (which was 'ignore')
-    selection_state = {c: 'maybe' for c in candidates}
+    # Extract labels and descriptions from candidates
+    # Candidates are now [{"label": "...", "description": "..."}, ...]
+    selection_state = {}
+    description_state = {}
+    
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            label = candidate.get('label', '')
+            desc = candidate.get('description', '')
+        else:
+            # Fallback for old format (plain strings)
+            label = candidate
+            desc = ''
+        
+        if label:
+            selection_state[label] = 'maybe'
+            description_state[label] = desc
     
     def render_interface(parent, dialog_ref=None):
         with parent:
             with ui.row().classes('w-full items-center justify-between'):
-                ui.label(f"Drill: {node.get('label')[:15]}...").classes('text-lg font-bold text-white')
+                ui.label(full_ancestry).classes('text-lg font-bold text-white')
                 if not dialog_ref:
                      pass 
 
-            ui.label("Select ideas to add.").classes('text-xs text-gray-400 mb-2')
+            ui.label("Select ideas to add and provide descriptions.").classes('text-xs text-gray-400 mb-2')
             
             
             def render_row(suggestion):
-                 with ui.row().classes('w-full items-center justify-between mb-2 bg-slate-800/40 p-2 rounded border border-slate-700/50'):
-                    ui.label(suggestion).classes('text-gray-200 text-sm flex-1 mr-2 leading-tight').style('word-wrap: break-word')
-                    
-                    # Direct mapping: UI component returns 'accepted'/'rejected'/'maybe'
-                    def on_change(new_val):
-                        selection_state[suggestion] = new_val
+                 with ui.column().classes('w-full mb-3 bg-slate-800/40 p-3 rounded border border-slate-700/50'):
+                    with ui.row().classes('w-full items-center justify-between mb-2'):
+                        ui.label(suggestion).classes('text-gray-200 text-sm font-bold flex-1 mr-2 leading-tight').style('word-wrap: break-word')
+                        
+                        # Direct mapping: UI component returns 'accepted'/'rejected'/'maybe'
+                        def on_change(new_val):
+                            selection_state[suggestion] = new_val
 
-                    render_tri_state_buttons(selection_state[suggestion], on_change)
+                        render_tri_state_buttons(selection_state[suggestion], on_change)
+                    
+                    # Description input
+                    def on_desc_change(e):
+                        description_state[suggestion] = e.value
+                    
+                    ui.textarea(
+                        label='Description (optional)', 
+                        value=description_state[suggestion]
+                    ).classes('w-full').props('rows=2 dense borderless').on('change', on_desc_change)
 
             with ui.scroll_area().classes('h-96 w-full border border-slate-700 rounded p-2 bg-slate-900'):
-                for suggestion in candidates:
-                    render_row(suggestion)
+                for label in selection_state.keys():
+                    render_row(label)
 
             def finish():
                 count = 0
@@ -167,7 +197,8 @@ async def start_drill_process(
                             label=text, 
                             parent_id=node_id, 
                             users=[active_user],
-                            interested=True
+                            interested=True,
+                            description=description_state.get(text, '')
                         )
                         count += 1
                     elif status == 'rejected':
@@ -175,7 +206,8 @@ async def start_drill_process(
                             label=text, 
                             parent_id=node_id, 
                             users=[active_user],
-                            interested=False
+                            interested=False,
+                            description=description_state.get(text, '')
                         )
                         count_declined += 1
                 

@@ -147,9 +147,8 @@ class GitManager:
         # If GitManager is initialized with repo_path="db", and db contains "data", this works.
         self._run(['git', 'add', f'data/{user}.json'])
         
-        # 2. Stage all mutations (new or modified)
-        # It's generally safe to add all mutations as they are append-only logs usually
-        self._run(['git', 'add', 'mutations/'])
+        # 2. Stage global data
+        self._run(['git', 'add', 'global.json'])
 
     def push_changes_for_user(self, user: str):
         """

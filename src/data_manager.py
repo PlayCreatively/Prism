@@ -103,6 +103,10 @@ class DataManager:
             # We copy g_node to avoid mutating the cache
             node_out = dict(g_node)
             
+            # Ensure description exists for backward compatibility
+            if 'description' not in node_out:
+                node_out['description'] = ""
+            
             interested = []
             rejected = []
             
@@ -144,7 +148,7 @@ class DataManager:
 
     # --- Write Operations ---
 
-    def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True) -> Dict[str, Any]:
+    def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True, description: str = "") -> Dict[str, Any]:
         """
         Adds node to Global graph.
         Optionally initializes user states (e.g. setting them as interested).
@@ -156,7 +160,8 @@ class DataManager:
         new_node_global = {
             "id": node_id,
             "label": label,
-            "parent_id": parent_id
+            "parent_id": parent_id,
+            "description": description
         }
         g_data["nodes"][node_id] = new_node_global
         self._save_global(g_data)
@@ -204,7 +209,7 @@ class DataManager:
 
     def update_shared_node(self, node_id: str, **kwargs) -> None:
         """
-        Updates global structure (Label, Parent).
+        Updates global structure (Label, Parent, Description).
         """
         g_data = self._load_global()
         if node_id in g_data["nodes"]:
@@ -214,6 +219,9 @@ class DataManager:
                 changed = True
             if "parent_id" in kwargs:
                 g_data["nodes"][node_id]["parent_id"] = kwargs["parent_id"]
+                changed = True
+            if "description" in kwargs:
+                g_data["nodes"][node_id]["description"] = kwargs["description"]
                 changed = True
             
             if changed:

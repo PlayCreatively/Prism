@@ -71,6 +71,12 @@ async def start_review_process(
                 # Card Body
                 ui.label(node.get('label', 'Untitled')).classes('text-xl font-bold text-white')
                 
+                # Description (Shared)
+                description = node.get('description', '')
+                if description:
+                    ui.label('Description:').classes('text-xs font-bold text-gray-400 mt-2')
+                    ui.label(description).classes('text-sm text-gray-300 italic')
+                
                 # Metadata (Context) - Aggregate from all users
                 ui.label('Context / Notes:').classes('text-xs font-bold text-gray-400 mt-2')
                 
