@@ -2,7 +2,7 @@
 ECharts options builder for PRISM graph visualization.
 
 This module handles conversion of graph data into ECharts-compatible options,
-including node styling, edge gradients, and layout configuration.
+including node styling, solid edge colors, and layout configuration.
 """
 
 from typing import Dict, List, Any, Optional
@@ -100,7 +100,7 @@ def build_echart_options(
             'borderWidth': border_width
         }
         
-        # Store computed opacity in node_map for edge gradient usage later
+        # Store computed opacity and color in node_map for edge color usage later
         node_map[nid]['_computed_opacity'] = opacity
         node_map[nid]['_computed_color'] = color
         
@@ -187,62 +187,18 @@ def build_echart_options(
                 'color': '#ffffff'  # Consensus white
             })
         else:
-            # Standard transition
+            # Standard transition with solid color inherited from child (target) node
             line_style['width'] = 4
             
-            # Default to manual gradient calculation based on positions
-            # 'source-target' can produce black edges in some setups, causing "wrong colors".
-            # To fix "inconsistent order", we must use node positions to orient the gradient.
-            
-            # Default coordinates (Left -> Right)
-            gx, gy, gx2, gy2 = 0, 0, 1, 0
-            
-            if positions:
-                # Retrieve coordinates to determine relative direction
-                # positions maps id -> [x, y]
-                s_pos = positions.get(src_id)
-                t_pos = positions.get(tgt_id)
-                
-                if s_pos is not None and t_pos is not None:
-                    sx, sy = s_pos
-                    tx, ty = t_pos
-                    
-                    # Logic: In ECharts gradient relative coords (0..1), 
-                    # 0 is Min(x/y) (Left/Top), 1 is Max(x/y) (Right/Bottom).
-                    # If sx < tx (Left->Right): start=0, end=1
-                    # If sx > tx (Right->Left): start=1, end=0
-                    gx = 0 if sx < tx else 1
-                    gx2 = 1 if sx < tx else 0
-                    
-                    gy = 0 if sy < ty else 1
-                    gy2 = 1 if sy < ty else 0
-            
-            # Reconstruct colors/opacity for gradient
-            # We use the cached values from the node loop to ensure edge opacity matches node state
-            c_source = s_node.get('_computed_color', color_from_users(list(s_node.get('interested_users', []))))
+            # We use the cached values from the node loop to ensure edge color matches node state
             c_target = t_node.get('_computed_color', color_from_users(list(t_node.get('interested_users', []))))
-            
-            op_source = s_node.get('_computed_opacity', 1.0)
             op_target = t_node.get('_computed_opacity', 1.0)
             
-            # Use RGBA for precise gradient opacity interpolation
-            rgba_source = hex_to_rgba(c_source, op_source)
+            # Use RGBA for precise color with opacity
             rgba_target = hex_to_rgba(c_target, op_target)
             
-            # Reset global opacity to 1.0 (defaults usually 1), handle alpha in color stops
             line_style['opacity'] = 1.0
-            
-            line_style['color'] = {
-                'type': 'linear',
-                'x': gx, 'y': gy, 'x2': gx2, 'y2': gy2,
-                'colorStops': [
-                    {'offset': 0, 'color': rgba_source},
-                    {'offset': 0.1, 'color': rgba_source},
-                    {'offset': 0.9, 'color': rgba_target},
-                    {'offset': 1, 'color': rgba_target}
-                ],
-                'global': False
-            }
+            line_style['color'] = rgba_target
 
         e_links.append({
             'source': src_id, 
