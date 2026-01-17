@@ -52,19 +52,39 @@ async def start_drill_process(
     temperature: float = 1.0,
     container: Any = None
 ):
+    # Create a persistent notification that we can dismiss later
+    loading_notification = None
+    
     if container:
         container.clear()
         with container:
              ui.spinner('dots', size='lg').classes('w-full text-center')
              ui.label("Consulting AI...").classes('w-full text-center text-gray-500 animate-pulse')
     else:
-        ui.notify("Consulting AI...", timeout=2000)
+        # Create a floating notification card that stays until we dismiss it
+        loading_notification = ui.notification(
+            message="Consulting AI...",
+            spinner=True,
+            timeout=None,  # Stays until dismissed
+            close_button=False
+        )
+    
+    def dismiss_loading():
+        """Dismiss the loading notification if it exists"""
+        nonlocal loading_notification
+        if loading_notification:
+            try:
+                loading_notification.dismiss()
+            except:
+                pass
+            loading_notification = None
     
     # 1. Gather Context
     try:
         graph = data_manager.get_graph()
         node = next((n for n in graph.get('nodes', []) if n['id'] == node_id), None)
         if not node: 
+            dismiss_loading()
             ui.notify("Node not found", color='negative')
             if container: on_complete()
             return
@@ -89,6 +109,7 @@ async def start_drill_process(
         
         full_context_str = "\n".join(combined_notes) if combined_notes else ""
     except Exception as e:
+        dismiss_loading()
         ui.notify(f"Context Error: {e}", color='negative')
         print(f"Drill context gathering error: {e}")
         if container:
@@ -100,10 +121,10 @@ async def start_drill_process(
 
     # 2. Call AI (IO Bound)
     try:
-        print(f"Calling AI with ancestry: {full_ancestry}")
-        print(f"Description: {node_description}")
-        print(f"Approved: {approved_children}")
-        print(f"Rejected: {rejected_children}")
+        print(f"[Drill] Calling AI with ancestry: {full_ancestry}")
+        print(f"[Drill] Description: {node_description}")
+        print(f"[Drill] Approved: {approved_children}")
+        print(f"[Drill] Rejected: {rejected_children}")
         candidates = await run.io_bound(
             ai_agent.generate_drill_candidates,
             full_ancestry,
@@ -113,16 +134,20 @@ async def start_drill_process(
             node_description,
             temperature
         )
-        print(f"AI returned {len(candidates) if candidates else 0} candidates")
+        print(f"[Drill] AI returned {len(candidates) if candidates else 0} candidates")
+        dismiss_loading()  # Success - dismiss loading notification
     except Exception as e:
-        ui.notify(f"AI Error: {e}", color='negative')
-        print(f"AI Error Details: {e}")
+        dismiss_loading()
+        error_msg = str(e)
+        ui.notify(f"AI Error: {error_msg}", color='negative', timeout=10000)
+        print(f"[Drill] AI Error Details: {e}")
         import traceback
         traceback.print_exc()
         if container:
              container.clear()
              with container:
-                  ui.label(f"AI Error: {e}").classes('text-red-500')
+                  ui.label('AI Error').classes('text-red-500 font-bold')
+                  ui.label(error_msg).classes('text-red-400 text-sm')
                   ui.button('Back', on_click=on_complete).props('flat')
         return
 

@@ -1,5 +1,6 @@
 import os
 import json
+import traceback
 from openai import OpenAI
 
 class AIAgent:
@@ -23,6 +24,7 @@ class AIAgent:
                 rejected_children=", ".join(rejected_children) if rejected_children else "None"
             )
 
+            print(f"[AI] Sending request to OpenAI...")
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 temperature=temperature,
@@ -32,15 +34,41 @@ class AIAgent:
                 ],
                 response_format={"type": "json_object"}
             )
+            
+            # Check if we got a valid response
+            if not response.choices:
+                raise ValueError("OpenAI returned empty choices")
+            
             content = response.choices[0].message.content
+            print(f"[AI] Received response: {content[:200]}..." if len(content) > 200 else f"[AI] Received response: {content}")
+            
+            if not content:
+                raise ValueError("OpenAI returned empty content")
+            
             data = json.loads(content)
             
             # Handle both old format (list of strings) and new format (list of objects)
             candidates = data.get("candidates", [])
+            
+            if not candidates:
+                print(f"[AI] Warning: No candidates in response. Full response: {data}")
+                return []
+            
             if candidates and isinstance(candidates[0], str):
                 # Old format: convert to new format
                 return [{"label": c, "description": ""} for c in candidates]
+            
+            print(f"[AI] Successfully parsed {len(candidates)} candidates")
             return candidates
+            
+        except json.JSONDecodeError as e:
+            error_msg = f"Failed to parse AI response as JSON: {e}"
+            print(f"[AI] {error_msg}")
+            print(f"[AI] Raw content: {content if 'content' in dir() else 'N/A'}")
+            traceback.print_exc()
+            raise ValueError(error_msg)
         except Exception as e:
-            print(f"AI Generation Error: {e}")
-            return []
+            error_msg = f"AI Generation Error: {type(e).__name__}: {e}"
+            print(f"[AI] {error_msg}")
+            traceback.print_exc()
+            raise
