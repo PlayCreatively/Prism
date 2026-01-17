@@ -44,6 +44,26 @@ def build_echart_options(
     for n in nodes:
         nid = n.get('id')
         node_map[nid] = n
+    
+    # Calculate hierarchy depth for each node
+    def get_depth(node_id: str, visited=None) -> int:
+        """Calculate how high up a node is in the hierarchy (root = 0)."""
+        if visited is None:
+            visited = set()
+        if node_id in visited:
+            return 0  # Prevent cycles
+        visited.add(node_id)
+        
+        node = node_map.get(node_id)
+        if not node:
+            return 0
+        parent_id = node.get('parent_id')
+        if not parent_id:
+            return 0  # Root node
+        return 1 + get_depth(parent_id, visited)
+    
+    # Precompute depths
+    node_depths = {n.get('id'): get_depth(n.get('id')) for n in nodes}
 
     for n in nodes:
         nid = n.get('id')
@@ -64,7 +84,11 @@ def build_echart_options(
                 continue
 
         color = color_from_users(users)
-        base_size = 20 + (5 * len(users))
+        # Size depends on hierarchy depth (higher up = larger)
+        # Depth 0 (root) is largest, deeper nodes are progressively smaller
+        depth = node_depths.get(nid, 0)
+        base_size = 40 - (depth * 6) + (2 * len(users))  # Larger for higher hierarchy, plus user boost
+        base_size = max(15, base_size)  # Ensure minimum size
         
         # Default Style
         opacity = 1.0
@@ -116,7 +140,7 @@ def build_echart_options(
         }
 
         # Root Node Logic (Overrrides)
-        is_root = label == "Thesis Idea"
+        is_root = depth == 0
         if is_root:
             item_style['borderColor'] = '#ffd700'
             item_style['borderWidth'] = 5
