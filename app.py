@@ -39,6 +39,20 @@ ui.add_head_html('''
             background: #334155; /* slate-700 */
         }
     </style>
+    <script>
+        // Prevent Ctrl key from triggering ECharts zoom/pan
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Control' || e.ctrlKey) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+        
+        document.addEventListener('keyup', function(e) {
+            if (e.key === 'Control') {
+                e.preventDefault();
+            }
+        }, { passive: false });
+    </script>
 ''', shared=True)
 
 # Attempt to import real project modules; provide minimal fallbacks if missing.
@@ -162,295 +176,9 @@ except Exception:
 
 from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba
 from src.ui_common import render_tri_state_buttons, render_editable_notes
+from src.edit import EditController, EditOverlay, EditActions, setup_edit_handlers
+from src.chart_builder import build_echart_options, normalize_click_payload, resolve_node_id_from_payload, REQUESTED_EVENT_KEYS
 
-
-# Build ECharts options from internal graph
-def build_echart_options(graph: Dict[str, Any], active_user: str = None, positions: Dict[str, Any] = None, show_dead: bool = False, all_users_view: bool = False) -> Dict[str, Any]:
-    nodes = graph.get('nodes', [])
-    edges = graph.get('edges', [])
-    active_user = (active_user or '').strip()
-
-    e_nodes = []
-    node_map = {}
-    
-    # 1. First pass to map nodes
-    for n in nodes:
-        nid = n.get('id')
-        node_map[nid] = n
-
-    for n in nodes:
-        nid = n.get('id')
-        label = n.get('label') or nid
-        users = n.get('interested_users', [])
-        rejected = n.get('rejected_users', [])
-        
-        # --- State Logic ---
-        is_dead = len(users) == 0
-        
-        # Dead Node Rule
-        if is_dead and not show_dead:
-            continue
-
-        if not all_users_view:
-            # Hide nodes rejected by valid active user (unless showing dead/hidden)
-            if active_user in rejected and not show_dead:
-                continue
-
-        color = color_from_users(users)
-        base_size = 20 + (5 * len(users))
-        
-        # Default Style
-        opacity = 1.0
-        border_type = 'solid'
-        border_width = 0
-        border_color = 'transparent'
-        
-        if not all_users_view:
-            # Apply Active User Context Rules
-            has_rejections = len(rejected) > 0
-            is_interested = active_user in users
-            
-            if has_rejections:
-                # Deprioritized: Anyone rejected it
-                # We use darkening instead of opacity to avoid additive transparency artifacts
-                color = darken_hex(color, 0.7) 
-                base_size = base_size * 0.6
-            elif not is_interested and not is_dead:
-                # Pending: No rejections, Active User hasn't voted (isn't in interested)
-                # Visual: Thick Yellow Dashed Border
-                border_width = 4
-                border_color = '#FFFF00' 
-                
-        # Scaling
-        size = base_size
-        
-        # Style Object
-        item_style = {
-            'color': color, 
-            'opacity': opacity,
-            'borderColor': border_color, 
-            'borderWidth': border_width
-        }
-        
-        # Store computed opacity in node_map for edge gradient usage later
-        node_map[nid]['_computed_opacity'] = opacity
-        node_map[nid]['_computed_color'] = color
-        
-        label_cfg = {
-            'show': True,
-            'formatter': label,
-            'fontSize': 14,
-            'fontWeight': 'bold',
-            'position': 'inside',
-            'color': '#888888' if has_rejections else color,
-            'textBorderColor': '#312e2a',
-            'textBorderWidth': 6
-        }
-
-        # Root Node Logic (Overrrides)
-        is_root = label == "Thesis Idea"
-        if is_root:
-            item_style['borderColor'] = '#ffd700'
-            item_style['borderWidth'] = 5
-            item_style['borderType'] = 'solid'
-            item_style['opacity'] = 1.0
-            size = 60
-            label_cfg['fontSize'] = 18
-
-        # Store description for tooltip
-        description = n.get('description', '')
-        tooltip_text = label
-        if description:
-            tooltip_text += f"<br/><span style='color:#999;font-size:11px'>{description}</span>"
-        
-        e_node = {
-            'id': nid,
-            'name': nid, 
-            'value': label,
-            'description': description,  # Store for reference
-            'symbol': 'circle',
-            'symbolSize': size,
-            'itemStyle': item_style,
-            'label': label_cfg,
-            'draggable': True,
-            'tooltip': {'formatter': tooltip_text}
-        }
-        
-        # Inject Layout Positions
-        if positions and nid in positions:
-            px, py = positions[nid]
-            e_node['x'] = (px * 500) 
-            e_node['y'] = (py * 350)
-            e_node['fixed'] = True
-            
-        e_nodes.append(e_node)
-
-    e_links = []
-    CONSENSUS_SET = {'Alex', 'Sasha', 'Alison'}
-    seen_pairs = set() # Track for undirected deduplication
-
-    for e in edges:
-        s = e.get('source')
-        t = e.get('target')
-        if s not in node_map or t not in node_map:
-            continue
-
-        # Treat graph as undirected for improved visualization
-        # Sort IDs to create a unique key for the connection regardless of direction
-        pair = tuple(sorted((s, t)))
-        if pair in seen_pairs:
-            continue
-        seen_pairs.add(pair)
-
-        # Check for Consensus Path (Edge between two white/full-consensus nodes)
-        src_id, tgt_id = s, t
-        s_node = node_map[src_id]
-        t_node = node_map[tgt_id]
-        
-        s_users = set(s_node.get('interested_users', []))
-        t_users = set(t_node.get('interested_users', []))
-        
-        is_consensus_edge = CONSENSUS_SET.issubset(s_users) and CONSENSUS_SET.issubset(t_users)
-        
-        # Determine Style
-        line_style = {
-            'curveness': 0,
-            'opacity': 0.8
-        }
-
-        if is_consensus_edge:
-            # Thick glowing line for Golden Path
-            line_style.update({
-                'width': 6, 
-                'opacity': 1.0,
-                'color': '#ffffff' # Consensus white
-            })
-        else:
-            # Standard transition
-            line_style['width'] = 4
-            
-            # Default to manual gradient calculation based on positions
-            # 'source-target' can produce black edges in some setups, causing "wrong colors".
-            # To fix "inconsistent order", we must use node positions to orient the gradient.
-            
-            # Default coordinates (Left -> Right)
-            gx, gy, gx2, gy2 = 0, 0, 1, 0
-            
-            if positions:
-                # Retrieve coordinates to determine relative direction
-                # positions maps id -> [x, y]
-                s_pos = positions.get(src_id)
-                t_pos = positions.get(tgt_id)
-                
-                if s_pos is not None and t_pos is not None:
-                    sx, sy = s_pos
-                    tx, ty = t_pos
-                    
-                    # Logic: In ECharts gradient relative coords (0..1), 
-                    # 0 is Min(x/y) (Left/Top), 1 is Max(x/y) (Right/Bottom).
-                    # If sx < tx (Left->Right): start=0, end=1
-                    # If sx > tx (Right->Left): start=1, end=0
-                    gx = 0 if sx < tx else 1
-                    gx2 = 1 if sx < tx else 0
-                    
-                    gy = 0 if sy < ty else 1
-                    gy2 = 1 if sy < ty else 0
-            
-            # Reconstruct colors/opacity for gradient
-            # We use the cached values from the node loop to ensure edge opacity matches node state
-            c_source = s_node.get('_computed_color', color_from_users(list(s_node.get('interested_users', []))))
-            c_target = t_node.get('_computed_color', color_from_users(list(t_node.get('interested_users', []))))
-            
-            op_source = s_node.get('_computed_opacity', 1.0)
-            op_target = t_node.get('_computed_opacity', 1.0)
-            
-            # Use RGBA for precise gradient opacity interpolation
-            rgba_source = hex_to_rgba(c_source, op_source)
-            rgba_target = hex_to_rgba(c_target, op_target)
-            
-            # Reset global opacity to 1.0 (defaults usually 1), handle alpha in color stops
-            line_style['opacity'] = 1.0
-            
-            line_style['color'] = {
-                'type': 'linear',
-                'x': gx, 'y': gy, 'x2': gx2, 'y2': gy2,
-                'colorStops': [
-                    {'offset': 0, 'color': rgba_source},
-                    {'offset': 0.1, 'color': rgba_source},
-                    {'offset': 0.9, 'color': rgba_target},
-                    {'offset': 1, 'color': rgba_target}
-                ],
-                'global': False
-            }
-
-        e_links.append({
-            'source': src_id, 
-            'target': tgt_id, 
-            'lineStyle': line_style,
-            'symbol': ['none', 'none'], # No arrows
-            'tooltip': {'show': False}
-        })
-
-    # Use 'none' if we have positions, else 'force'
-    layout_mode = 'none' if positions else 'force'
-
-    options = {
-        'backgroundColor': "#312e2a", 
-        'tooltip': {},
-        'series': [{
-            'type': 'graph',
-            'layout': layout_mode,
-            'roam': True,
-            'label': {'position': 'bottom', 'distance': 5},
-            'force': {
-                'repulsion': 1000,
-                'gravity': 0.1,
-                'edgeLength': 80,
-                'layoutAnimation': True
-            },
-            'data': e_nodes,
-            'links': e_links,
-            'zoom': 0.6,
-            'center': [0, 0] # Center the view on 0,0 where we put the nodes
-        }]
-    }
-    return options
-
-_REQUESTED_EVENT_KEYS = ['componentType', 'name', 'seriesType', 'value']
-
-def normalize_click_payload(raw_payload: Any) -> Dict[str, Any]:
-    """Normalize NiceGUI chart click payloads into a dictionary for easier parsing."""
-    if isinstance(raw_payload, dict):
-        return raw_payload
-    if isinstance(raw_payload, (list, tuple)):
-        return {
-            _REQUESTED_EVENT_KEYS[i]: raw_payload[i]
-            for i in range(min(len(raw_payload), len(_REQUESTED_EVENT_KEYS)))
-        }
-    if isinstance(raw_payload, str):
-        return {'name': raw_payload}
-    return {}
-
-def resolve_node_id_from_payload(payload: Dict[str, Any], data_manager: DataManager) -> str:
-    """Return a node_id from a normalized payload by validating against DataManager data."""
-    if not isinstance(payload, dict):
-        return None
-    component = payload.get('componentType')
-    if component != 'series':
-        return None
-
-    node_id = payload.get('name')
-    if not node_id:
-        return None
-
-    graph_nodes = data_manager.get_graph().get('nodes', [])
-    if any(n.get('id') == node_id for n in graph_nodes):
-        return node_id
-
-    for node in graph_nodes:
-        if node.get('label') == node_id:
-            return node.get('id')
-    return None
 
 # Initialize core managers
 data_manager = DataManager(data_dir="db/data")
@@ -499,10 +227,15 @@ def main_page():
         'active_user': app.storage.user.get('active_user', 'Alex'),
         'show_dead': app.storage.user.get('show_dead', False),
         'all_users_view': app.storage.user.get('all_users_view', False),
-        'node_positions': {},
         'last_selection_time': 0,
         'temperature': app.storage.user.get('temperature', 0.7),
-        'test_mode': app.storage.user.get('test_mode', False)
+        'test_mode': app.storage.user.get('test_mode', False),
+        'is_ctrl_pressed': False,
+        'mouse_position': (0, 0),
+        'dragging_node_id': None,
+        'edit_controller': EditController(),
+        'edit_overlay': EditOverlay(),
+        'edit_actions': EditActions(data_manager)
     }
 
     # --- Git State & Logic ---
@@ -580,59 +313,135 @@ def main_page():
     # Check local status (for Publish button) periodically
     ui.timer(5.0, check_git_status)
 
-    def run_layout(force_reset=False):
-        if not nx: return
-        graph = data_manager.get_graph()
-        
-        G = nx.Graph()
-        for n in graph.get('nodes', []):
-            G.add_node(n['id'])
-        for e in graph.get('edges', []):
-            G.add_edge(e['source'], e['target'])
-            
-        current_pos = state.get('node_positions', {})
-        
-        seed_pos = None
-        fixed_nodes = None
-        
-        if not force_reset and current_pos:
-            # Anchor existing nodes so they don't jump
-            common = [n for n in G.nodes() if n in current_pos]
-            if common:
-                fixed_nodes = common
-                seed_pos = current_pos
-        
-        try:
-            # Run layout engine (NetworkX)
-            # k=0.6 makes it spacious
-            pos = nx.spring_layout(G, pos=seed_pos, fixed=fixed_nodes, k=0.6, iterations=50)
-            state['node_positions'] = pos
-        except Exception as e:
-            print(f"Layout engine error: {e}")
-
     def get_current_options():
         graph = data_manager.get_graph()
-        # Ensure layout exists
-        if nx and not state.get('node_positions'):
-            run_layout()
         return build_echart_options(
             graph, 
             state.get('active_user'), 
-            state.get('node_positions'),
+            positions=None,
             show_dead=state.get('show_dead', False),
             all_users_view=state.get('all_users_view', False)
         )
 
     def refresh_chart_ui():
-        # Update layout if new nodes appear
-        if nx and state['chart']:
-            run_layout(force_reset=False)
-
         if state['chart']:
             options = get_current_options()
-            # Valid update
-            state['chart'].options.update(options)
-            state['chart'].update()
+            
+            # ECharts is the source of truth for positions.
+            # We only update visual properties for existing nodes.
+            # For NEW nodes, we pass their initial position from Python.
+            import json
+            series_data = options.get('series', [{}])[0].get('data', [])
+            series_links = options.get('series', [{}])[0].get('links', [])
+            
+            # Build a map of ALL node data keyed by id
+            # This includes visual properties AND positions for new nodes
+            all_nodes_map = {}
+            for node in series_data:
+                nid = node.get('name') or node.get('id')
+                all_nodes_map[nid] = {
+                    'id': node.get('id'),
+                    'name': node.get('name'),
+                    'value': node.get('value'),
+                    'itemStyle': node.get('itemStyle'),
+                    'label': node.get('label'),
+                    'symbolSize': node.get('symbolSize'),
+                    'symbol': node.get('symbol'),
+                    'tooltip': node.get('tooltip'),
+                    'draggable': node.get('draggable', True),
+                    # Include position for new nodes
+                    'x': node.get('x'),
+                    'y': node.get('y'),
+                    'fixed': node.get('fixed'),
+                }
+            
+            valid_ids_json = json.dumps(list(all_nodes_map.keys()))
+            all_nodes_json = json.dumps(all_nodes_map)
+            
+            js_code = f'''
+                if (window.prismChart) {{
+                    const chart = window.prismChart;
+                    const allNodesMap = {all_nodes_json};
+                    const validNodeIds = new Set({valid_ids_json});
+                    
+                    // Get LIVE positions from the internal graph model (not stale getOption data)
+                    const livePositions = {{}};
+                    try {{
+                        const model = chart.getModel();
+                        const seriesModel = model.getSeriesByIndex(0);
+                        if (seriesModel) {{
+                            const graph = seriesModel.getGraph();
+                            if (graph) {{
+                                graph.eachNode(function(node) {{
+                                    const layout = node.getLayout();
+                                    if (layout) {{
+                                        livePositions[node.id] = {{ x: layout[0], y: layout[1] }};
+                                    }}
+                                }});
+                            }}
+                        }}
+                    }} catch(e) {{
+                        console.log('Could not get live positions:', e);
+                    }}
+                    
+                    // Build set of existing node IDs (nodes that have live positions)
+                    const existingIds = new Set(Object.keys(livePositions));
+                    
+                    // Update existing nodes: use LIVE positions, update visual properties
+                    const updatedData = [];
+                    for (const [nid, livePos] of Object.entries(livePositions)) {{
+                        if (!validNodeIds.has(nid)) continue;  // Skip deleted nodes
+                        
+                        const newProps = allNodesMap[nid];
+                        if (newProps) {{
+                            updatedData.push({{
+                                id: newProps.id,
+                                name: newProps.name,
+                                value: newProps.value,
+                                itemStyle: newProps.itemStyle,
+                                label: newProps.label,
+                                symbolSize: newProps.symbolSize,
+                                symbol: newProps.symbol,
+                                tooltip: newProps.tooltip,
+                                draggable: newProps.draggable,
+                                // Use LIVE position from graph model
+                                x: livePos.x,
+                                y: livePos.y,
+                                fixed: true
+                            }});
+                        }}
+                    }}
+                    
+                    // Add NEW nodes (not in ECharts yet) with their positions from Python
+                    const newNodes = [];
+                    for (const [nid, props] of Object.entries(allNodesMap)) {{
+                        if (!existingIds.has(nid)) {{
+                            newNodes.push({{
+                                id: props.id,
+                                name: props.name,
+                                value: props.value,
+                                itemStyle: props.itemStyle,
+                                label: props.label,
+                                symbolSize: props.symbolSize,
+                                symbol: props.symbol,
+                                tooltip: props.tooltip,
+                                draggable: props.draggable,
+                                x: props.x,
+                                y: props.y,
+                                fixed: props.fixed
+                            }});
+                        }}
+                    }}
+                    
+                    chart.setOption({{
+                        series: [{{
+                            data: [...updatedData, ...newNodes],
+                            links: {json.dumps(series_links)}
+                        }}]
+                    }}, {{notMerge: false, lazyUpdate: true}});
+                }}
+            '''
+            ui.run_javascript(js_code)
             
         # Update Pending Badge
         if state.get('pending_badge_ui'):
@@ -676,6 +485,10 @@ def main_page():
             container.clear()
 
     def handle_chart_click(event):
+        # SKIP click handling in edit mode - let edit controller handle it
+        if state.get('is_ctrl_pressed'):
+            return
+        
         node_id = None
 
         # Normalize NiceGUI event payloads: they can be dicts or a list of requested fields.
@@ -955,6 +768,35 @@ def main_page():
                     lambda action: set_vote(node_id, action, active_user)
                 )
 
+    # --- Manual Editing (New Controller-Based System) ---
+    
+    # Initialize the edit overlay and set up handlers
+    edit_overlay = state['edit_overlay']
+    edit_controller = state['edit_controller']
+    edit_actions = state['edit_actions']
+    
+    # Set up all edit handlers (extracted to src/edit/handlers.py)
+    edit_handlers = setup_edit_handlers(
+        state=state,
+        data_manager=data_manager,
+        edit_controller=edit_controller,
+        edit_overlay=edit_overlay,
+        edit_actions=edit_actions,
+        normalize_click_payload=normalize_click_payload,
+        resolve_node_id_from_payload=resolve_node_id_from_payload,
+        refresh_chart_ui=refresh_chart_ui,
+        reset_selection=reset_selection,
+        check_git_status=check_git_status,
+    )
+    
+    handle_keyboard = edit_handlers['handle_keyboard']
+    handle_mouse_move = edit_handlers['handle_mouse_move']
+    handle_mouse_down = edit_handlers['handle_mouse_down']
+    handle_mouse_up = edit_handlers['handle_mouse_up']
+    
+    # Global keyboard handler
+    ui.keyboard(on_key=handle_keyboard)
+    
     # --- Layout Construction ---
 
     # 1. Full Screen Chart
@@ -964,13 +806,63 @@ def main_page():
     state['chart'].style('width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 0;')
     
     # We use 'componentClick' to strictly capture NODE clicks.
-    state['chart'].on('componentClick', handle_chart_click, _REQUESTED_EVENT_KEYS)
+    state['chart'].on('componentClick', handle_chart_click, REQUESTED_EVENT_KEYS)
     
     # We use 'click' to capture BACKGROUND clicks (args will be empty for background).
     # Since handle_chart_click handles empty payloads by resetting, this works effectively.
     # Note: 'click' also fires when a node is clicked, but usually componentClick fires first or we just rely on the payload check.
     # To be safe, we bind 'click' to the SAME handler, because our handler checks for node_id.
-    state['chart'].on('click', handle_chart_click, _REQUESTED_EVENT_KEYS)
+    state['chart'].on('click', handle_chart_click, REQUESTED_EVENT_KEYS)
+    
+    # Manual editing: mouse events
+    # Note: ECharts may not directly support these events via NiceGUI binding
+    # This is a best-effort implementation - may need JavaScript injection
+    try:
+        state['chart'].on('mousemove', handle_mouse_move, ['offsetX', 'offsetY'])
+        state['chart'].on('mousedown', handle_mouse_down, REQUESTED_EVENT_KEYS)
+        state['chart'].on('mouseup', handle_mouse_up, REQUESTED_EVENT_KEYS)
+    except Exception as e:
+        print(f"Warning: Could not bind mouse events for manual editing: {e}")
+    
+    # Listen for pan/zoom to update cached positions
+    def handle_roam(e):
+        """Update overlay positions when chart is panned/zoomed."""
+        ui.run_javascript('if(window.updateEditOverlayPositions) window.updateEditOverlayPositions();')
+    
+    state['chart'].on('chart:graphroam', handle_roam)
+
+    # Setup the edit overlay (HTML layer on top of chart)
+    edit_overlay.setup()
+    
+    # Expose the ECharts instance globally for our overlay JS to use
+    # NiceGUI stores Vue components in refs with id prefix 'r', accessible via getElement()
+    chart_id = state["chart"].id
+    ui.run_javascript(f'''
+        // Wait for chart to be ready, then store reference using NiceGUI's getElement
+        setTimeout(function() {{
+            try {{
+                // NiceGUI provides getElement(id) which returns the Vue component
+                const vueComponent = getElement({chart_id});
+                if (vueComponent && vueComponent.chart) {{
+                    window.prismChart = vueComponent.chart;
+                    window.prismChartId = {chart_id};
+                    console.log('PRISM: Chart reference stored via getElement, id={chart_id}');
+                    
+                    // Set initial zoom and center only once at startup
+                    vueComponent.chart.setOption({{
+                        series: [{{
+                            center: [0, 0],
+                            zoom: 0.6
+                        }}]
+                    }});
+                }} else {{
+                    console.log('PRISM: Vue component found but no chart property', vueComponent);
+                }}
+            }} catch(e) {{
+                console.log('PRISM: Error getting chart:', e.message);
+            }}
+        }}, 500);
+    ''')
 
 
     # 2. Floating Header

@@ -76,11 +76,16 @@ The "Single Source of Truth" for the topology of the idea map.
         "uuid_v4": {
           "id": "uuid_v4",
           "label": "Serious Games",
-          "parent_id": "root_uuid" 
+          "parent_id": "root_uuid",
+          "description": "Optional markdown description"
         }
+      },
+      "positions": {
+        "uuid_v4": [0.5, 0.3]
       }
     }
     ```
+    *   **positions:** Optional field storing normalized [x, y] coordinates for manual layout persistence
 
 **2. User State Files (`db/data/{user}.json`)**
 Stores the specific relationship between a user and the nodes.
@@ -176,10 +181,57 @@ The generative process. This is now purely about **expanding** the graph, not re
     *   New nodes start as "Red/Blue/Green" (Shared but Pending).
     *   They only become White once all users have run **Workflow B** and accepted them.
 
-### Workflow D: Manual Maintenance
+### Workflow D: Manual Node Editing
+Users can directly manipulate the graph structure through visual interactions when the Ctrl key is held.
+
+**Activation:** Hold **Ctrl** key to enter manual edit mode.
+
+**Visual Feedback:**
+*   Semi-transparent preview nodes and dashed edges appear to show what action will occur
+*   Preview elements use the active user's RGB color
+*   Edge hover detection highlights edges in different colors based on action type
+
+**Editing Actions:**
+
+1.  **Create New Node:**
+    *   **Trigger:** Ctrl + Click on empty space
+    *   **Behavior:** Creates a new node labeled "New Idea" at click position
+    *   **Auto-Connect:** If clicking near an existing node (within its visual radius), automatically creates a parent-child connection
+    *   **Vote:** Automatically votes "interested" for the active user
+
+2.  **Create Intermediary Node on Edge:**
+    *   **Trigger:** Ctrl + Click on middle 20% of an edge
+    *   **Behavior:** Creates a new node between two connected nodes
+    *   **Label:** Automatically named "{Source}→{Target}"
+    *   **Structure:** Breaks edge A→B into A→New→B
+    *   **Vote:** Automatically votes "interested" for the active user
+
+3.  **Cut Edge:**
+    *   **Trigger:** Ctrl + Click outside middle 20% of an edge (edge highlights red)
+    *   **Behavior:** Removes parent-child relationship
+    *   **Visual Preview:** Edge appears red while hovering
+
+4.  **Drag Node to Make Intermediary:**
+    *   **Trigger:** Ctrl + Drag existing node over middle of an edge
+    *   **Behavior:** Inserts the dragged node between the edge's source and target
+    *   **Preservation:** Other connections to the dragged node are preserved
+    *   **Priority:** Takes precedence over "connect nodes" action
+
+5.  **Drag Node to Connect:**
+    *   **Trigger:** Ctrl + Drag node near another node (within connection radius)
+    *   **Behavior:** Creates parent-child relationship
+    *   **Preservation:** Existing connections are maintained
+
+**Position Persistence:**
+*   Node positions are automatically saved to `db/global.json` in the `positions` field
+*   Positions use normalized coordinates [0,1] range
+*   Manual layouts survive application restarts
+*   Position conflicts in git are resolved via last-write-wins (rare due to infrequent structural edits)
+
+### Workflow E: Manual Maintenance
 *   **Edit Node:** Users can manually rename nodes or add metadata/context text. This is crucial for guiding the AI in future "Drill Downs."
 *   **Pruning:** Users can manually delete nodes they created, provided they have not yet been pushed to the shared remote. Shared nodes must be handled via a "Propose Deletion" mutation.
-*   **Linking:** Users can manually draw edges between orphan nodes to clean up the graph structure.
+*   **Linking:** Users can manually draw edges between orphan nodes to clean up the graph structure via Ctrl+Drag interactions.
 
 ---
 
