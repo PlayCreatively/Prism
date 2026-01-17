@@ -364,55 +364,33 @@ def main_page():
                     const allNodesMap = {all_nodes_json};
                     const validNodeIds = new Set({valid_ids_json});
                     
-                    // Get LIVE positions from the internal graph model (not stale getOption data)
-                    const livePositions = {{}};
-                    try {{
-                        const model = chart.getModel();
-                        const seriesModel = model.getSeriesByIndex(0);
-                        if (seriesModel) {{
-                            const graph = seriesModel.getGraph();
-                            if (graph) {{
-                                graph.eachNode(function(node) {{
-                                    const layout = node.getLayout();
-                                    if (layout) {{
-                                        livePositions[node.id] = {{ x: layout[0], y: layout[1] }};
-                                    }}
-                                }});
+                    // Get current option to find existing nodes
+                    const opt = chart.getOption();
+                    const currentData = (opt.series && opt.series[0] && opt.series[0].data) || [];
+                    const existingIds = new Set(currentData.map(n => n.id || n.name));
+                    
+                    // For existing nodes: only update visual properties, don't touch position
+                    // This prevents force layout from restarting
+                    const updatedData = currentData
+                        .filter(n => validNodeIds.has(n.id || n.name))
+                        .map(n => {{
+                            const nid = n.id || n.name;
+                            const newProps = allNodesMap[nid];
+                            if (newProps) {{
+                                return {{
+                                    ...n,  // Keep existing x, y, and other state
+                                    itemStyle: newProps.itemStyle,
+                                    label: newProps.label,
+                                    symbolSize: newProps.symbolSize,
+                                    symbol: newProps.symbol,
+                                    tooltip: newProps.tooltip,
+                                    value: newProps.value
+                                }};
                             }}
-                        }}
-                    }} catch(e) {{
-                        console.log('Could not get live positions:', e);
-                    }}
+                            return n;
+                        }});
                     
-                    // Build set of existing node IDs (nodes that have live positions)
-                    const existingIds = new Set(Object.keys(livePositions));
-                    
-                    // Update existing nodes: use LIVE positions, update visual properties
-                    const updatedData = [];
-                    for (const [nid, livePos] of Object.entries(livePositions)) {{
-                        if (!validNodeIds.has(nid)) continue;  // Skip deleted nodes
-                        
-                        const newProps = allNodesMap[nid];
-                        if (newProps) {{
-                            updatedData.push({{
-                                id: newProps.id,
-                                name: newProps.name,
-                                value: newProps.value,
-                                itemStyle: newProps.itemStyle,
-                                label: newProps.label,
-                                symbolSize: newProps.symbolSize,
-                                symbol: newProps.symbol,
-                                tooltip: newProps.tooltip,
-                                draggable: newProps.draggable,
-                                // Use LIVE position from graph model
-                                x: livePos.x,
-                                y: livePos.y,
-                                fixed: true
-                            }});
-                        }}
-                    }}
-                    
-                    // Add NEW nodes (not in ECharts yet) with their positions from Python
+                    // Add NEW nodes (not in ECharts yet)
                     const newNodes = [];
                     for (const [nid, props] of Object.entries(allNodesMap)) {{
                         if (!existingIds.has(nid)) {{
@@ -425,10 +403,8 @@ def main_page():
                                 symbolSize: props.symbolSize,
                                 symbol: props.symbol,
                                 tooltip: props.tooltip,
-                                draggable: props.draggable,
-                                x: props.x,
-                                y: props.y,
-                                fixed: props.fixed
+                                draggable: props.draggable
+                                // No x/y - let force layout place it naturally
                             }});
                         }}
                     }}

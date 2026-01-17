@@ -266,9 +266,10 @@ def build_echart_options(
             'roam': True,
             'label': {'position': 'bottom', 'distance': 5},
             'force': {
-                'repulsion': 1000,
+                'repulsion': 800,
                 'gravity': 0.1,
                 'edgeLength': 80,
+                'friction': 0.3,  # Higher = slower/calmer (0-1, default ~0.6)
                 'layoutAnimation': True
             },
             'data': e_nodes,
