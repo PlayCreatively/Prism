@@ -175,7 +175,7 @@ except Exception:
     node_to_echart_node = None
 
 from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba
-from src.ui_common import render_tri_state_buttons, render_editable_notes
+from src.ui_common import render_tri_state_buttons, render_editable_notes, render_other_users_notes
 from src.edit import EditController, EditOverlay, EditActions, setup_edit_handlers
 from src.chart_builder import build_echart_options, normalize_click_payload, resolve_node_id_from_payload, REQUESTED_EVENT_KEYS
 
@@ -707,6 +707,13 @@ def main_page():
                 on_change=update_metadata,
                 label=f'{active_user}\'s notes',
                 editable=True
+            )
+            
+            # Show other users' notes with accept/reject coloring
+            render_other_users_notes(
+                node_id=node_id,
+                active_user=active_user,
+                data_manager=data_manager
             )
             
             save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')

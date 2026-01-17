@@ -123,3 +123,57 @@ def render_editable_notes(
             editor.on_value_change(lambda e: on_change(e.value))
 
 
+def render_other_users_notes(
+    node_id: str,
+    active_user: str,
+    data_manager,
+    users: list = None
+):
+    """
+    Renders notes from other users (not the active user) for a given node.
+    Colors the header/border green for accepted users, red for rejected users.
+    """
+    if users is None:
+        users = ['Alex', 'Sasha', 'Alison']
+    
+    other_users = [u for u in users if u != active_user]
+    
+    has_any_notes = False
+    
+    for user in other_users:
+        user_node = data_manager.get_user_node(user, node_id)
+        if not user_node:
+            continue
+        
+        metadata = user_node.get('metadata', '')
+        if not metadata or not metadata.strip():
+            continue
+        
+        has_any_notes = True
+        
+        # Determine vote status for coloring
+        is_interested = user_node.get('interested', True)
+        if is_interested:
+            # Accepted - green
+            border_color = 'border-green-500'
+            text_color = 'text-green-400'
+            bg_color = 'bg-green-900/20'
+        else:
+            # Rejected - red
+            border_color = 'border-red-500'
+            text_color = 'text-red-400'
+            bg_color = 'bg-red-900/20'
+        
+        # Render user's notes with colored styling
+        # Determine icon based on vote status
+        icon = 'check' if is_interested else 'close'
+        
+        with ui.element('div').classes(f'w-full rounded border-l-4 {border_color} {bg_color} p-2 mt-2'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon(icon).classes(f'{text_color}')
+                ui.label(f"{user}'s notes").classes(f'text-xs font-bold {text_color}')
+            ui.markdown(metadata).classes('text-sm text-gray-300 mt-1 [&_h1]:text-lg [&_h1]:mt-0 [&_h1]:pt-0 [&_h1]:mb-2 [&_h1]:font-bold')
+    
+    if not has_any_notes:
+        # No other users have notes - optionally show nothing or a placeholder
+        pass
