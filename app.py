@@ -120,25 +120,7 @@ except Exception:  # pragma: no cover - fallback for test environments
             # No-op for fallback
             return
 
-try:
-    from src.drill_engine import DrillEngine
-except Exception:  # pragma: no cover - fallback
-    class DrillEngine:
-        """Fallback DrillEngine: simulates drilling by creating a child node."""
-        def __init__(self, data_manager: DataManager):
-            self.dm = data_manager
-
-        def drill(self, node_id: str) -> Dict[str, Any]:
-            # Create a new "drilled down" child node under node_id
-            label = f"Drill: details about {node_id[:8]}"
-            users = ['Alex']  # simulated action
-            new_node = self.dm.add_node(label=label, parent_id=node_id, users=users)
-            # Mark the parent as 'accepted' to simulate consensus movement
-            try:
-                self.dm.update_node(node_id, status='accepted')
-            except Exception:
-                pass
-            return new_node
+from src.drill_engine import DrillEngine
 
 try:
     from src.ai_agent import AIAgent
@@ -628,43 +610,44 @@ def main_page():
         display_label = generic_node.get('label', '') # Label is shared
         
         with container:
-            # Header
-            with ui.row().classes('w-full justify-between'):
-                ui.badge(status_label.upper(), color=status_color)
-                ui.label(node_id[:8]).classes('text-xs text-gray-400')
-
-            ui.label('DETAILS').classes('text-xs font-bold text-gray-400 mt-2')
-            label_input = ui.input('Label', value=display_label).classes('w-full')
+            # Header row with label input and close button
+            with ui.row().classes('w-full items-center justify-between -mt-4'):
+                label_input = ui.input(value=display_label).classes('text-lg font-bold text-gray-100 flex-1').props('borderless')
+                ui.button(icon='close', on_click=reset_selection).props('flat round dense color=grey').tooltip('Close')
             
+            ui.separator().classes('-mt-3')
+            
+            # Status row
+            with ui.row().classes('w-full justify-between items-center'):
+                ui.badge(status_label.upper(), color=status_color)
+                with ui.row().classes('gap-1 flex-wrap'):
+                    interested_set = set(generic_node.get('interested_users', []))
+                    rejected_set = set(generic_node.get('rejected_users', []))
+                    
+                    # User-specific text color classes (Tailwind)
+                    user_text_colors = {
+                        'Alex': 'text-red-400', 
+                        'Sasha': 'text-green-400', 
+                        'Alison': 'text-blue-400'
+                    }
+
+                    for user in ['Alex', 'Sasha', 'Alison']:
+                        txt_cls = user_text_colors.get(user, '')
+                        
+                        if user in interested_set:
+                            with ui.chip(icon='check', color='green').props('outline size=sm'):
+                                ui.label(user).classes(txt_cls)
+                        elif user in rejected_set:
+                            with ui.chip(icon='close', color='red').props('outline size=sm'):
+                                ui.label(user).classes(txt_cls)
+                        else:
+                            # Grayed out / Question mark
+                            with ui.chip(icon='help_outline', color='grey').props('outline size=sm').classes('opacity-40'):
+                                ui.label(user).classes('') # No specific user color for pending/gray state
+
             # Description (shared across all users)
             description_input = ui.textarea('Description', value=generic_node.get('description', '')).classes('w-full')
             description_input.props('outlined rows=3')
-
-            ui.label('Status').classes('text-xs font-bold text-gray-400 mt-2')
-            with ui.row().classes('gap-1 flex-wrap'):
-                interested_set = set(generic_node.get('interested_users', []))
-                rejected_set = set(generic_node.get('rejected_users', []))
-                
-                # User-specific text color classes (Tailwind)
-                user_text_colors = {
-                    'Alex': 'text-red-400', 
-                    'Sasha': 'text-green-400', 
-                    'Alison': 'text-blue-400'
-                }
-
-                for user in ['Alex', 'Sasha', 'Alison']:
-                    txt_cls = user_text_colors.get(user, '')
-                    
-                    if user in interested_set:
-                        with ui.chip(icon='check', color='green').props('outline size=sm'):
-                            ui.label(user).classes(txt_cls)
-                    elif user in rejected_set:
-                        with ui.chip(icon='close', color='red').props('outline size=sm'):
-                            ui.label(user).classes(txt_cls)
-                    else:
-                        # Grayed out / Question mark
-                        with ui.chip(icon='help_outline', color='grey').props('outline size=sm').classes('opacity-40'):
-                             ui.label(user).classes('') # No specific user color for pending/gray state
 
             # Local state for metadata since we use an external component
             current_metadata = display_metadata
@@ -922,12 +905,6 @@ def main_page():
     
     with state['context_card']:
         with ui.element('div').classes('w-full h-full flex flex-col gap-4'):
-            with ui.row().classes('w-full items-center justify-between'):
-                ui.label('Context Window').classes('text-lg font-bold text-gray-100')
-                with ui.row().classes('gap-1'):
-                     ui.button(icon='close', on_click=reset_selection).props('flat round dense color=grey').tooltip('Close')
-            
-            ui.separator()
             state['details_container'] = ui.column().classes('w-full gap-3')
             # Empty init
 

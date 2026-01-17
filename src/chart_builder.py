@@ -79,8 +79,8 @@ def build_echart_options(
             continue
 
         if not all_users_view:
-            # Hide nodes rejected by valid active user (unless showing dead/hidden)
-            if active_user in rejected and not show_dead:
+            # Hide nodes rejected by any user (unless showing dead/hidden)
+            if rejected and not active_user in users and not show_dead:
                 continue
 
         color = color_from_users(users)
@@ -109,9 +109,9 @@ def build_echart_options(
                 base_size = base_size * 0.6
             elif not is_interested and not is_dead:
                 # Pending: No rejections, Active User hasn't voted (isn't in interested)
-                # Visual: Thick Yellow Dashed Border
+                # Visual: Thick White Solid Border
                 border_width = 4
-                border_color = '#FFFF00' 
+                border_color = '#FFFFFF' 
                 
         # Scaling
         size = base_size
