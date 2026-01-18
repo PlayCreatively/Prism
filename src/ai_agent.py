@@ -3,10 +3,13 @@ import json
 import traceback
 from openai import OpenAI
 
+from src.paths import get_prompts_dir
+
+
 class AIAgent:
-    def __init__(self, prompts_dir="prompts"):
+    def __init__(self, prompts_dir=None):
         self.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        self.prompts_dir = prompts_dir
+        self.prompts_dir = prompts_dir or str(get_prompts_dir())
 
     def _load_prompt(self, filename):
         path = os.path.join(self.prompts_dir, filename)

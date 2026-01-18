@@ -6,7 +6,22 @@
 		{
 			"label": "start app",
 			"type": "shell",
-			"command": "python app.py"
+			"command": "python app.py",
+			"problemMatcher": []
+		},
+		{
+			"label": "Build: PyInstaller",
+			"type": "shell",
+			"command": "powershell -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\build_pyinstaller.ps1\"",
+			"group": {
+				"kind": "build",
+				"isDefault": false
+			},
+			"presentation": {
+				"clear": false,
+				"reveal": "always",
+				"panel": "shared"
+			}
 		}
 	]
 }

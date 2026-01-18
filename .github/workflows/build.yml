@@ -1,0 +1,143 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: PRISM-Windows
+            executable_ext: .exe
+          - os: macos-latest
+            artifact_name: PRISM-macOS
+            executable_ext: ""
+          - os: ubuntu-latest
+            artifact_name: PRISM-Linux
+            executable_ext: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller prism.spec --noconfirm
+
+      - name: Copy external folders (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Copy prompts folder to dist
+          Copy-Item -Path "prompts" -Destination "dist/PRISM/prompts" -Recurse
+          # Create empty db folder
+          New-Item -ItemType Directory -Path "dist/PRISM/db" -Force
+          # Create a README for users
+          @"
+          PRISM - Collaborative Consensus & Interest Mapping
+          
+          Getting Started:
+          1. Run PRISM${{ matrix.executable_ext }}
+          2. Enter your OpenAI API key when prompted
+          3. Create your first project
+          
+          Folders:
+          - db/ - Your project data (auto-created)
+          - prompts/ - AI prompt templates (editable)
+          - config.json - Your settings (auto-created)
+          
+          "@ | Out-File -FilePath "dist/PRISM/README.txt" -Encoding utf8
+
+      - name: Copy external folders (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          # Copy prompts folder to dist
+          cp -r prompts dist/PRISM/prompts
+          # Create empty db folder
+          mkdir -p dist/PRISM/db
+          # Create a README for users
+          cat > dist/PRISM/README.txt << 'EOF'
+          PRISM - Collaborative Consensus & Interest Mapping
+          
+          Getting Started:
+          1. Run PRISM${{ matrix.executable_ext }}
+          2. Enter your OpenAI API key when prompted
+          3. Create your first project
+          
+          Folders:
+          - db/ - Your project data (auto-created)
+          - prompts/ - AI prompt templates (editable)
+          - config.json - Your settings (auto-created)
+          EOF
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/PRISM/*" -DestinationPath "${{ matrix.artifact_name }}.zip"
+
+      - name: Create archive (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist && zip -r "../${{ matrix.artifact_name }}.zip" PRISM
+
+      - name: Create archive (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd dist && tar -czvf "../${{ matrix.artifact_name }}.tar.gz" PRISM
+
+      - name: Upload artifact (Windows/macOS)
+        if: runner.os != 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/PRISM-Windows/PRISM-Windows.zip
+            artifacts/PRISM-macOS/PRISM-macOS.zip
+            artifacts/PRISM-Linux/PRISM-Linux.tar.gz
+          generate_release_notes: true

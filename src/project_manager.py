@@ -15,15 +15,14 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 import logging
 
-logger = logging.getLogger(__name__)
+from src.paths import get_db_dir, ensure_db_dir
 
-# Base directory for all projects
-PROJECTS_BASE_DIR = Path("db")
+logger = logging.getLogger(__name__)
 
 
 def get_projects_dir() -> Path:
     """Get the base directory containing all projects."""
-    return PROJECTS_BASE_DIR
+    return get_db_dir()
 
 
 def list_projects() -> List[str]:
