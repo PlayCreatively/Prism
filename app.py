@@ -57,69 +57,7 @@ ui.add_head_html('''
     </script>
 ''', shared=True)
 
-# Attempt to import real project modules; provide minimal fallbacks if missing.
-try:
-    from src.data_manager import DataManager
-except Exception:  # pragma: no cover - fallback for test environments
-    class DataManager:
-        """Fallback DataManager: keeps an in-memory graph for basic demo/testing."""
-        def __init__(self, data_dir='data'):
-            self.data_dir = data_dir
-            self.nodes = {}
-            self.edges = []
-            self._seed_demo()
-
-        def _seed_demo(self):
-            # Create demo nodes for testing - uses generic naming
-            demo_topics = ['Serious Games', 'Human-Computer Interaction', 'ML for Creativity', 'Collaborative Storytelling']
-            for name in demo_topics:
-                node_id = str(uuid.uuid4())
-                self.nodes[node_id] = {
-                    'id': node_id,
-                    'label': name,
-                    'parent_id': None,
-                    'status': 'accepted',
-                    'metadata': f'Auto-seeded node: {name}',
-                    'interested_users': []
-                }
-            # create links between them
-            ids = list(self.nodes.keys())
-            if len(ids) >= 4:
-                self.edges.append({'source': ids[0], 'target': ids[3]})
-                self.edges.append({'source': ids[1], 'target': ids[3]})
-                self.edges.append({'source': ids[2], 'target': ids[3]})
-
-        def load(self):
-            # In real implementation, would read JSON files. Here it's a no-op.
-            return
-
-        def get_graph(self) -> Dict[str, Any]:
-            return {'nodes': list(self.nodes.values()), 'edges': list(self.edges)}
-
-        def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True):
-            node_id = str(uuid.uuid4())
-            self.nodes[node_id] = {
-                'id': node_id,
-                'label': label,
-                'parent_id': parent_id,
-                'status': 'accepted' if interested else 'rejected',
-                'metadata': '',
-                'interested_users': (users or []) if interested else []
-            }
-            if parent_id:
-                self.edges.append({'source': node_id, 'target': parent_id})
-            return self.nodes[node_id]
-
-        def update_node(self, node_id: str, **kwargs):
-            if node_id in self.nodes:
-                self.nodes[node_id].update(kwargs)
-                return self.nodes[node_id]
-            raise KeyError('node not found')
-
-        def save(self):
-            # No-op for fallback
-            return
-
+from src.data_manager import DataManager
 from src.drill_engine import DrillEngine
 
 try:
