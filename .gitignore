@@ -3,3 +3,7 @@ __pycache__/
 db/
 .env
 /.nicegui
+/dist
+config.json
+/.venv
+/build

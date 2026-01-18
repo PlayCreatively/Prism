@@ -11,6 +11,7 @@ implementations are provided so the app can still start for testing.
 from nicegui import ui, run, app
 import sys
 import time
+import asyncio
 try:
     import networkx as nx
 except ImportError:
@@ -19,6 +20,14 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv()
 import multiprocessing
+
+# Path and config initialization
+from src.paths import ensure_db_dir, ensure_prompts_dir, get_prompts_dir
+from src.config import get_api_key, set_api_key, validate_api_key, ensure_api_key_in_env
+
+# Ensure required directories exist on startup
+ensure_db_dir()
+ensure_prompts_dir()
 
 # Global Styles
 ui.add_head_html('''
@@ -107,12 +116,76 @@ from src.project_manager import (
 )
 
 
-# AI Agent is global (stateless)
-ai_agent = AIAgent()
-
 # Note: DataManager, DrillEngine, and GitManager are now initialized per-project
 # inside the page function to support multi-project switching
 
+# Check for API key and load into environment
+if not ensure_api_key_in_env():
+    print("[PRISM] No API key found. User will be prompted on first page load.")
+
+# AI Agent is global (stateless) - initialized after API key is potentially loaded
+ai_agent = AIAgent()
+
+
+
+# Helper to show API key setup dialog
+def show_api_key_dialog(on_complete=None, is_required=False):
+    """Show modal dialog to configure OpenAI API key."""
+    with ui.dialog() as dialog, ui.card().classes('w-[500px]'):
+        if is_required:
+            ui.label('API Key Required').classes('text-xl font-bold text-primary')
+            ui.label('PRISM needs an OpenAI API key to generate ideas.').classes('text-gray-400 mb-2')
+        else:
+            ui.label('Configure API Key').classes('text-lg font-bold')
+        
+        current_key = get_api_key()
+        masked_key = f"{current_key[:7]}...{current_key[-4:]}" if current_key and len(current_key) > 15 else ""
+        
+        if masked_key:
+            ui.label(f'Current key: {masked_key}').classes('text-gray-500 text-sm mb-2')
+        
+        api_key_input = ui.input(
+            'OpenAI API Key', 
+            placeholder='sk-...',
+            password=True,
+            password_toggle_button=True
+        ).classes('w-full')
+        
+        status_label = ui.label('').classes('text-sm')
+        
+        async def do_validate():
+            key = api_key_input.value.strip()
+            if not key:
+                status_label.text = '❌ Please enter an API key'
+                status_label.classes('text-red-500', remove='text-green-500 text-yellow-500')
+                return
+            
+            status_label.text = '⏳ Validating...'
+            status_label.classes('text-yellow-500', remove='text-red-500 text-green-500')
+            
+            # Run validation in background to not block UI
+            is_valid, message = validate_api_key(key)
+            
+            if is_valid:
+                status_label.text = f'✅ {message}'
+                status_label.classes('text-green-500', remove='text-red-500 text-yellow-500')
+                set_api_key(key)
+                ui.notify('API key saved successfully!', type='positive')
+                await asyncio.sleep(1)
+                dialog.close()
+                if on_complete:
+                    on_complete()
+            else:
+                status_label.text = f'❌ {message}'
+                status_label.classes('text-red-500', remove='text-green-500 text-yellow-500')
+        
+        with ui.row().classes('w-full justify-end gap-2 mt-4'):
+            if not is_required:
+                ui.button('Cancel', on_click=dialog.close).props('flat')
+            ui.button('Validate & Save', on_click=do_validate).props('color=primary')
+    
+    dialog.open()
+    return dialog
 
 
 # Helper to show create project dialog
@@ -161,6 +234,51 @@ def show_create_project_dialog(on_created=None, is_first_project=False):
 def main_page():
     ui.dark_mode().enable()
     ui.query('body').style('margin: 0; padding: 0; overflow: hidden;')
+    
+    # --- API Key Check ---
+    # Show setup dialog if no API key is configured
+    if not get_api_key():
+        with ui.column().classes('fixed inset-0 flex items-center justify-center bg-slate-900 z-50'):
+            with ui.card().classes('w-[500px] p-8'):
+                ui.icon('key', size='xl').classes('text-primary mb-4')
+                ui.label('API Key Required').classes('text-2xl font-bold text-white')
+                ui.label('PRISM needs an OpenAI API key to generate ideas.').classes('text-gray-400 mb-4')
+                ui.label('Your key will be stored locally in config.json').classes('text-gray-500 text-sm mb-4')
+                
+                api_key_input = ui.input(
+                    'OpenAI API Key', 
+                    placeholder='sk-...',
+                    password=True,
+                    password_toggle_button=True
+                ).classes('w-full')
+                
+                status_label = ui.label('').classes('text-sm mt-2')
+                
+                async def do_validate_and_continue():
+                    key = api_key_input.value.strip()
+                    if not key:
+                        status_label.text = '❌ Please enter an API key'
+                        status_label.classes('text-red-500', remove='text-green-500 text-yellow-500')
+                        return
+                    
+                    status_label.text = '⏳ Validating...'
+                    status_label.classes('text-yellow-500', remove='text-red-500 text-green-500')
+                    
+                    is_valid, message = validate_api_key(key)
+                    
+                    if is_valid:
+                        status_label.text = f'✅ {message}'
+                        status_label.classes('text-green-500', remove='text-red-500 text-yellow-500')
+                        set_api_key(key)
+                        ui.notify('API key saved! Reloading...', type='positive')
+                        await asyncio.sleep(1)
+                        ui.navigate.to('/')  # Reload to continue setup
+                    else:
+                        status_label.text = f'❌ {message}'
+                        status_label.classes('text-red-500', remove='text-green-500 text-yellow-500')
+                
+                ui.button('Validate & Continue', on_click=do_validate_and_continue).props('color=primary size=lg').classes('mt-4')
+        return  # Don't render the rest until API key is set
     
     # --- Project Selection ---
     # Check for available projects
@@ -296,8 +414,8 @@ def main_page():
         if not health['ok']:
             # Silent return on repeated failures to avoid spam, 
             # or just log it to console
-            # for issue in health['issues']:
-            #     ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
+            for issue in health['issues']:
+                ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
             return
 
         try:
@@ -1062,5 +1180,13 @@ def main_page():
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    ui.run(title='PRISM', port=8081, reload=not getattr(sys, 'frozen', False), storage_secret='prism_secret_key_123')
+    ui.run(
+        title='PRISM',
+        port=8081,
+        reload=not getattr(sys, 'frozen', False),
+        storage_secret='prism_secret_key_123',
+        native=True,  # Run as native desktop app
+        window_size=(1280, 720),
+        fullscreen=True,
+    )
 
