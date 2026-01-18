@@ -9,11 +9,8 @@ implementations are provided so the app can still start for testing.
 """
 
 from nicegui import ui, run, app
-from typing import Dict, List, Any
 import sys
-import uuid
 import time
-import threading
 try:
     import networkx as nx
 except ImportError:
@@ -94,7 +91,7 @@ except Exception:
     # We'll build our own conversion below if helper not present.
     node_to_echart_node = None
 
-from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba, get_all_users, get_visible_users, get_hidden_users, toggle_user_visibility, get_user_color
+from src.utils import get_all_users, get_visible_users, get_hidden_users, toggle_user_visibility, get_user_color
 from src.ui_common import render_tri_state_buttons, render_editable_notes, render_other_users_notes
 from src.edit import EditController, EditOverlay, EditActions, setup_edit_handlers
 from src.chart_builder import build_echart_options, normalize_click_payload, resolve_node_id_from_payload, REQUESTED_EVENT_KEYS
