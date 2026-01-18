@@ -6,7 +6,7 @@ including node styling, solid edge colors, and layout configuration.
 """
 
 from typing import Dict, List, Any, Optional
-from src.utils import color_from_users, darken_hex, hex_to_rgba, get_visible_users
+from src.utils import color_from_users, darken_hex, lerp_hex, hex_to_rgba, get_visible_users
 
 
 # Event keys we request from ECharts click events
@@ -116,6 +116,7 @@ def build_echart_options(
         border_type = 'solid'
         border_width = 0
         border_color = 'transparent'
+        background_color = '#312e2a'
         has_rejections = False
         
         if not all_users_view:
@@ -123,16 +124,16 @@ def build_echart_options(
             has_rejections = len(rejected) > 0
             is_interested = active_user in users
             
-            if has_rejections:
-                # Deprioritized: Anyone rejected it
-                # We use darkening instead of opacity to avoid additive transparency artifacts
-                color = darken_hex(color, 0.7) 
-                base_size = base_size * 0.6
-            elif not is_interested and not is_dead:
-                # Pending: No rejections, Active User hasn't voted (isn't in interested)
-                # Visual: Thick White Solid Border
-                border_width = 4
-                border_color = '#FFFFFF' 
+        if has_rejections:
+            # Deprioritized: Anyone rejected it
+            # We use darkening instead of opacity to avoid additive transparency artifacts
+            color = lerp_hex(color, background_color, 0.9)
+            base_size = base_size * 0.6
+        elif not is_interested and not is_dead:
+            # Pending: No rejections, Active User hasn't voted (isn't in interested)
+            # Visual: Thick White Solid Border
+            border_width = 4
+            border_color = '#FFFFFF' 
                 
         # Scaling
         size = base_size
@@ -155,8 +156,8 @@ def build_echart_options(
             'fontSize': 14,
             'fontWeight': 'bold',
             'position': 'inside',
-            'color': '#888888' if has_rejections else color,
-            'textBorderColor': '#312e2a',
+            'color': color,
+            'textBorderColor': background_color,
             'textBorderWidth': 6
         }
 
@@ -258,7 +259,7 @@ def build_echart_options(
     layout_mode = 'none' if positions else 'force'
 
     options = {
-        'backgroundColor': "#312e2a", 
+        'backgroundColor': background_color, 
         'tooltip': {},
         'animation': True,
         'animationDurationUpdate': 0,  # Prevent animated repositioning on updates

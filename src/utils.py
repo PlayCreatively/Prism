@@ -12,7 +12,10 @@ _user_settings_cache = {
 # RGB Spectrum offset: shifts the starting position of the color window
 # 0.0 = start at Red, 0.33 = start at Green, 0.67 = start at Blue, 1.0 = wraps back to Red
 # Range: 0.0 to 1.0 (values wrap around)
-RGB_SPECTRUM_OFFSET = 0
+RGB_SPECTRUM_OFFSET = {
+    3 : 0.2,
+    4 : 0.2
+}
 
 
 def get_all_users(data_dir: str = "db/data") -> List[str]:
@@ -118,7 +121,7 @@ def get_user_color(user_id: str, visible_users: Optional[List[str]] = None, data
     # Each user gets a segment of width 3/count along the R-G-B spectrum
     # Spectrum: R covers [0,1], G covers [1,2], B covers [2,3]
     # Apply offset (scaled to 0-3 range) and wrap around
-    offset = (RGB_SPECTRUM_OFFSET % 1.0) * 3.0
+    offset = (RGB_SPECTRUM_OFFSET.get(count, 0.0) % 1.0) * 3.0
     segment_width = 3.0 / count
     start = (index * segment_width + offset) % 3.0
     end = start + segment_width
@@ -178,7 +181,7 @@ def color_from_users(users: List[str], visible_users: Optional[List[str]] = None
     
     count = len(visible_users)
     segment_width = 3.0 / count
-    offset = (RGB_SPECTRUM_OFFSET % 1.0) * 3.0
+    offset = (RGB_SPECTRUM_OFFSET.get(count, 0.0) % 1.0) * 3.0
     
     # Helper for wrap-around channel overlap
     def channel_overlap(ch_start, ch_end, seg_start, seg_end):
@@ -228,6 +231,17 @@ def darken_hex(hex_color: str, amount: float) -> str:
     r = int(r * (1 - amount))
     g = int(g * (1 - amount))
     b = int(b * (1 - amount))
+    return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+
+def lerp_hex(hex_a: str, hex_b: str, t: float) -> str:
+    """Linearly interpolates between two hex colors by t (0.0 to 1.0)."""
+    hex_a = hex_a.lstrip('#')
+    hex_b = hex_b.lstrip('#')
+    r1, g1, b1 = tuple(int(hex_a[i:i+2], 16) for i in (0, 2, 4))
+    r2, g2, b2 = tuple(int(hex_b[i:i+2], 16) for i in (0, 2, 4))
+    r = int(r1 + (r2 - r1) * t)
+    g = int(g1 + (g2 - g1) * t)
+    b = int(b1 + (b2 - b1) * t)
     return '#{:02x}{:02x}{:02x}'.format(r, g, b)
 
 def hex_to_rgba(hex_color: str, opacity: float) -> str:
