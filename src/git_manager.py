@@ -1,5 +1,15 @@
 import subprocess
-from typing import Optional
+from typing import Optional, Callable, List
+import traceback
+
+
+class GitError(Exception):
+    """Custom exception for git operations with detailed context."""
+    def __init__(self, message: str, operation: str, stderr: str = "", returncode: int = 0):
+        self.operation = operation
+        self.stderr = stderr
+        self.returncode = returncode
+        super().__init__(message)
 
 
 class GitManager:
@@ -14,11 +24,27 @@ class GitManager:
     - push_changes(user): Runs add, commit with message "Update by <user>", then push.
     """
 
-    def __init__(self, repo_path: Optional[str] = None):
+    def __init__(self, repo_path: Optional[str] = None, on_error: Optional[Callable[[str, str], None]] = None):
         """
         :param repo_path: Optional path to the git repository. If None, commands run in current working directory.
+        :param on_error: Optional callback for error notifications. Receives (title, message).
         """
         self.repo_path = repo_path
+        self._on_error = on_error
+        self._errors: List[str] = []  # Collect errors for batch reporting
+
+    def _notify_error(self, title: str, message: str):
+        """Internal helper to report errors via callback."""
+        error_msg = f"{title}: {message}"
+        self._errors.append(error_msg)
+        if self._on_error:
+            self._on_error(title, message)
+
+    def get_errors(self) -> List[str]:
+        """Get and clear collected errors."""
+        errors = self._errors.copy()
+        self._errors.clear()
+        return errors
 
     def _run(self, args):
         """
@@ -41,6 +67,7 @@ class GitManager:
         """
         Perform `git pull --rebase`. 
         If it fails due to missing upstream configuration, attempts to configure it and retry.
+        Returns: CompletedProcess on success, None if no upstream (new repo), raises GitError on failure.
         """
         try:
             return self._run(['git', 'pull', '--rebase'])
@@ -62,12 +89,26 @@ class GitManager:
                         
                         # 4. Retry pull
                         return self._run(['git', 'pull', '--rebase'])
-                except Exception:
-                    # If any of the recovery steps fail (e.g. remote branch doesn't exist yet),
-                    # we suppress the original error so that 'push' can attempt to create the remote branch.
-                    pass
+                except subprocess.CalledProcessError as recovery_error:
+                    # Recovery failed - this is expected for new repos without remote branches
+                    # Log but don't error - push will create the remote branch
+                    self._notify_error(
+                        "Git Pull Info",
+                        f"No upstream branch yet for '{branch}' - will be created on push"
+                    )
+                    return None
+                except Exception as unexpected:
+                    # Unexpected error during recovery
+                    self._notify_error(
+                        "Git Pull Recovery Failed",
+                        f"Unexpected error: {str(unexpected)}\n{traceback.format_exc()}"
+                    )
+                    return None
                 return None
-            raise e
+            # Non-128 error - this is a real failure
+            error_msg = e.stderr.strip() if e.stderr else str(e)
+            self._notify_error("Git Pull Failed", error_msg)
+            raise GitError(f"Pull failed: {error_msg}", "pull_rebase", e.stderr, e.returncode)
 
     def add_all(self):
         """
@@ -84,19 +125,33 @@ class GitManager:
     def push(self):
         """
         Perform `git push`. Attempts to set upstream if generic push fails.
+        Raises GitError on failure.
         """
         try:
             return self._run(['git', 'push'])
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as initial_error:
             # Fallback: Try setting upstream for the current branch
             try:
                 res = self._run(['git', 'branch', '--show-current'])
                 branch = res.stdout.strip()
                 if branch:
                     return self._run(['git', 'push', '-u', 'origin', branch])
-            except Exception:
-                pass
-            # If fallback fails, re-raise the original error (or let the caller handle failure)
+            except subprocess.CalledProcessError as fallback_error:
+                # Both push attempts failed - report the fallback error
+                error_msg = fallback_error.stderr.strip() if fallback_error.stderr else str(fallback_error)
+                self._notify_error("Git Push Failed", f"Could not push to origin/{branch}: {error_msg}")
+                raise GitError(
+                    f"Push failed: {error_msg}",
+                    "push",
+                    fallback_error.stderr,
+                    fallback_error.returncode
+                )
+            except Exception as unexpected:
+                # Unexpected error during fallback
+                error_msg = str(unexpected)
+                self._notify_error("Git Push Failed", f"Unexpected error: {error_msg}")
+                raise GitError(f"Push failed unexpectedly: {error_msg}", "push")
+            # Re-raise original if we somehow get here
             raise
 
     def has_changes(self, user: str) -> bool:
@@ -111,9 +166,13 @@ class GitManager:
             res = self._run(['git', 'cherry', '-v'])
             if res.stdout and res.stdout.strip():
                 return True
-        except subprocess.CalledProcessError:
-            # Fails if no upstream is configured, which is expected in some new repos
-            pass
+        except subprocess.CalledProcessError as e:
+            # Return code 128 = no upstream configured (expected for new repos)
+            # Return code 1 = no commits yet (expected for new repos)
+            if e.returncode not in (1, 128):
+                # Unexpected error - report it
+                error_msg = e.stderr.strip() if e.stderr else f"Exit code {e.returncode}"
+                self._notify_error("Git Status Check Warning", f"cherry failed: {error_msg}")
 
         # 2. Check for uncommitted changes (User specific)
         # git status --porcelain gives a clean parsable output
@@ -153,17 +212,33 @@ class GitManager:
     def push_changes_for_user(self, user: str):
         """
         Stage user-specific changes, commit, and push.
+        Raises GitError on failure with detailed context.
         """
-        self.stage_user_changes(user)
+        try:
+            self.stage_user_changes(user)
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.strip() if e.stderr else str(e)
+            self._notify_error("Git Stage Failed", f"Could not stage changes: {error_msg}")
+            raise GitError(f"Staging failed: {error_msg}", "stage_user_changes", e.stderr, e.returncode)
         
-        # Try to commit. If empty, it throws CalledProcessError, which we ignore (nothing to commit).
+        # Try to commit. Return code 1 with "nothing to commit" is OK.
         try:
             self.commit(f'Update by {user}')
-        except subprocess.CalledProcessError:
-            pass
+        except subprocess.CalledProcessError as e:
+            # Check if this is the expected "nothing to commit" case
+            if e.returncode == 1 and e.stdout and 'nothing to commit' in e.stdout.lower():
+                # This is fine - no changes to commit, but we still want to push unpushed commits
+                pass
+            elif e.returncode == 1 and e.stderr and 'nothing to commit' in e.stderr.lower():
+                # Same check for stderr
+                pass
+            else:
+                # Real commit failure
+                error_msg = e.stderr.strip() if e.stderr else e.stdout.strip() if e.stdout else str(e)
+                self._notify_error("Git Commit Failed", f"Could not commit: {error_msg}")
+                raise GitError(f"Commit failed: {error_msg}", "commit", e.stderr, e.returncode)
 
-        # Pull and Push MUST succeed. If they fail, we want the error to propagate
-        # so the UI can report it (instead of silently returning False).
+        # Pull and Push MUST succeed. If they fail, GitError is raised with notification.
         self.pull_rebase()
         self.push()
         return True

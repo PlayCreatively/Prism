@@ -80,10 +80,11 @@ except ImportError:
     def get_pending_nodes(*args): return []
 
 try:
-    from src.git_manager import GitManager
+    from src.git_manager import GitManager, GitError
 except ImportError:
     print("GitManager missing")
     GitManager = None
+    GitError = None
 
 try:
     from src.graph_viz import node_to_echart_node  # optional helper
@@ -102,7 +103,7 @@ data_manager = DataManager(data_dir="db/data")
 # DrillEngine expects a list of users - discover dynamically from data files
 drill_engine = DrillEngine(users=get_all_users())
 ai_agent = AIAgent()
-git_manager = GitManager(repo_path="db") if GitManager else None
+# git_manager is initialized per-page with error callback to enable UI notifications
 
 # Load data at startup, but only in the main process to avoid repeated
 # initialization when PyInstaller's bootloader / runtime hooks spawn
@@ -172,6 +173,10 @@ def main_page():
 
     # --- Git State & Logic ---
     git_btn_ref = {}
+    
+    # Create git_manager - errors are collected internally and raised as GitError exceptions
+    # which are caught by the async handlers that have proper UI context for notifications
+    git_manager = GitManager(repo_path="db") if GitManager else None
 
     async def check_git_status():
         if not git_manager: return
@@ -188,7 +193,15 @@ def main_page():
             else:
                 btn.classes(add='hidden')
         except Exception as e:
+            error_msg = str(e)
             print(f"Git check error: {e}")
+            ui.notify(
+                f'Git status check failed: {error_msg}',
+                type='warning',
+                position='bottom-right',
+                timeout=5000,
+                close_button=True
+            )
 
     async def do_git_push():
         if not git_manager: return
@@ -234,9 +247,18 @@ def main_page():
                      ui.notify('Git: Up to date', position='bottom-right', color='positive')
              
         except Exception as e:
-             # This often happens if no upstream is configured or network is down
-             # We suppress this in the loop to avoid spamming the user
+             # Show notification for pull failures - but throttle to avoid spam
+             error_msg = str(e)
              print(f"Git auto-pull failed: {e}")
+             # Only show notification if verbose (initial load) or if it's a critical error
+             if verbose or (GitError and isinstance(e, GitError)):
+                 ui.notify(
+                     f'Git sync failed: {error_msg}',
+                     type='warning',
+                     position='bottom-right',
+                     timeout=8000,
+                     close_button=True
+                 )
 
     # Run pull on load (immediately)
     ui.timer(0.1, lambda: auto_pull(verbose=True), once=True)
