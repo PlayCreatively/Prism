@@ -873,13 +873,10 @@ def main_page():
                     window.prismChartId = {chart_id};
                     console.log('PRISM: Chart reference stored via getElement, id={chart_id}');
                     
-                    // Set initial zoom and center only once at startup
-                    vueComponent.chart.setOption({{
-                        series: [{{
-                            center: [0, 0],
-                            zoom: 0.6
-                        }}]
-                    }});
+                    // Intentionally do NOT force-set `center`/`zoom` here.
+                    // Forcing an initial center can be reapplied during later
+                    // option merges and cause the viewport to jump to (0,0).
+                    console.log('PRISM: Chart ready — skipping forced initial center/zoom to preserve user viewport');
                 }} else {{
                     console.log('PRISM: Vue component found but no chart property', vueComponent);
                 }}
