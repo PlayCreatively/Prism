@@ -7,6 +7,7 @@ to keep the main application file focused on routing and layout.
 
 from nicegui import ui
 from typing import Dict, Any, Callable
+import time
 
 from src.edit.controller import EditController
 from src.edit.overlay import EditOverlay
@@ -105,9 +106,11 @@ def setup_edit_handlers(
     
     def handle_mouse_down(event):
         """Detect drag start on nodes."""
-        if not state.get('is_ctrl_pressed'):
-            return
-        
+        # Always record a timestamp for mouse-down so the app can detect
+        # very short drags or long-hold interactions even when not in
+        # manual edit mode.
+        state['last_mouse_down_time'] = time.time()
+
         raw = event.args if hasattr(event, 'args') else event
         payload = normalize_click_payload(raw)
         
@@ -121,6 +124,9 @@ def setup_edit_handlers(
     
     async def handle_mouse_up(event):
         """Execute manual edit action on mouse release."""
+        # Record mouse-up timestamp for diagnostics and to compute durations
+        state['last_mouse_up_time'] = time.time()
+
         if not state.get('is_ctrl_pressed'):
             state['dragging_node_id'] = None
             return
