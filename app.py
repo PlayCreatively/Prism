@@ -943,6 +943,29 @@ def main_page():
         ).props('dense outlined').classes('w-32')
         user_select.on('update:model-value', lambda e: set_active_user(user_select.value))
         
+        # Add User button
+        def show_add_user_dialog():
+            with ui.dialog() as dialog, ui.card().classes('w-80'):
+                ui.label('Add User to Project').classes('text-lg font-bold')
+                username_input = ui.input('Username', placeholder='e.g., NewUser').classes('w-full')
+                error_label = ui.label('').classes('text-red-500 text-sm')
+                
+                def do_add_user():
+                    result = add_user_to_project(current_project, username_input.value)
+                    if result['success']:
+                        ui.notify(result['message'], type='positive')
+                        dialog.close()
+                        ui.navigate.to('/')  # Reload to show new user
+                    else:
+                        error_label.text = result['message']
+                
+                with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                    ui.button('Cancel', on_click=dialog.close).props('flat')
+                    ui.button('Add User', on_click=do_add_user).props('color=primary')
+            dialog.open()
+        
+        ui.button(icon='person_add', on_click=show_add_user_dialog).props('flat dense round color=primary').tooltip('Add User to Project')
+        
         # User Visibility Filter dropdown
         def build_user_filter_options():
             """Build options for user visibility filter with colored labels."""
