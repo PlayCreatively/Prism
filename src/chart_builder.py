@@ -6,7 +6,7 @@ including node styling, solid edge colors, and layout configuration.
 """
 
 from typing import Dict, List, Any, Optional
-from src.utils import color_from_users, darken_hex, hex_to_rgba
+from src.utils import color_from_users, darken_hex, hex_to_rgba, get_visible_users
 
 
 # Event keys we request from ECharts click events
@@ -18,7 +18,8 @@ def build_echart_options(
     active_user: str = None,
     positions: Dict[str, Any] = None,
     show_dead: bool = False,
-    all_users_view: bool = False
+    all_users_view: bool = False,
+    visible_users: List[str] = None
 ) -> Dict[str, Any]:
     """
     Build ECharts options from internal graph representation.
@@ -29,10 +30,26 @@ def build_echart_options(
         positions: Dict mapping node_id -> [x, y] coordinates
         show_dead: Whether to show nodes with no interested users
         all_users_view: Whether in "all users" view mode (no filtering)
+        visible_users: List of users to consider visible (None = compute dynamically)
         
     Returns:
         ECharts options dict ready for ui.echart()
     """
+    # Get visible users for color calculations
+    if visible_users is None:
+        visible_users = get_visible_users()
+    
+    # If no visible users, return empty chart
+    if not visible_users:
+        return {
+            'series': [{
+                'type': 'graph',
+                'data': [],
+                'links': [],
+                'label': {'show': True, 'formatter': 'No visible users'},
+            }]
+        }
+    
     nodes = graph.get('nodes', [])
     edges = graph.get('edges', [])
     active_user = (active_user or '').strip()
@@ -68,8 +85,12 @@ def build_echart_options(
     for n in nodes:
         nid = n.get('id')
         label = n.get('label') or nid
-        users = n.get('interested_users', [])
-        rejected = n.get('rejected_users', [])
+        all_interested = n.get('interested_users', [])
+        all_rejected = n.get('rejected_users', [])
+        
+        # Filter to only visible users
+        users = [u for u in all_interested if u in visible_users]
+        rejected = [u for u in all_rejected if u in visible_users]
         
         # --- State Logic ---
         is_dead = len(users) == 0
@@ -83,7 +104,7 @@ def build_echart_options(
             if rejected and not active_user in users and not show_dead:
                 continue
 
-        color = color_from_users(users)
+        color = color_from_users(users, visible_users=visible_users)
         # Size depends on hierarchy depth (higher up = larger)
         # Depth 0 (root) is largest, deeper nodes are progressively smaller
         depth = node_depths.get(nid, 0)
@@ -171,7 +192,8 @@ def build_echart_options(
         e_nodes.append(e_node)
 
     e_links = []
-    CONSENSUS_SET = {'Alex', 'Sasha', 'Alison'}
+    # Consensus is when all visible users are interested
+    consensus_set = set(visible_users)
     seen_pairs = set()  # Track for undirected deduplication
 
     for e in edges:
@@ -195,7 +217,7 @@ def build_echart_options(
         s_users = set(s_node.get('interested_users', []))
         t_users = set(t_node.get('interested_users', []))
         
-        is_consensus_edge = CONSENSUS_SET.issubset(s_users) and CONSENSUS_SET.issubset(t_users)
+        is_consensus_edge = consensus_set.issubset(s_users) and consensus_set.issubset(t_users)
         
         # Determine Style
         line_style = {

@@ -18,18 +18,8 @@ Public functions:
 """
 
 from typing import List, Dict, Iterable, Set, Optional
+from src.utils import color_from_users, get_visible_users
 
-
-# Color mapping according to Section 2: RGB Model
-_COLOR_MAP = {
-    frozenset(['Alex']): '#ff0000',              # Red
-    frozenset(['Sasha']): '#00ff00',             # Green
-    frozenset(['Alison']): '#0000ff',            # Blue
-    frozenset(['Alex', 'Sasha']): '#ffff00',     # Yellow
-    frozenset(['Alex', 'Alison']): '#ff00ff',    # Magenta
-    frozenset(['Sasha', 'Alison']): '#00ffff',   # Cyan
-    frozenset(['Alex', 'Sasha', 'Alison']): '#ffffff',  # White (full consensus)
-}
 
 # Default colors
 _DEFAULT_NODE_COLOR = '#cccccc'  # fallback gray for unknown/missing lists
@@ -43,23 +33,18 @@ def _normalize_users(interested_users: Optional[Iterable[str]]) -> Set[str]:
     return {u.strip() for u in interested_users if isinstance(u, str) and u.strip()}
 
 
-def color_for_interested_users(interested_users: Optional[Iterable[str]]) -> str:
+def color_for_interested_users(interested_users: Optional[Iterable[str]], visible_users: Optional[List[str]] = None) -> str:
     """
     Return a hex color string representing the combination of interested users.
+    
+    Uses the dynamic color system from utils.py that assigns colors based on
+    hue rotation through the visible users list. When all visible users are
+    interested, the color approaches white.
 
-    Rules (as in project spec):
-      - Alex -> red (#ff0000)
-      - Sasha -> green (#00ff00)
-      - Alison -> blue (#0000ff)
-      - Alex+Sasha -> yellow (#ffff00)
-      - Alex+Alison -> magenta (#ff00ff)
-      - Sasha+Alison -> cyan (#00ffff)
-      - All three -> white (#ffffff)
-
-    If the set of interested users does not match any known combination, returns a gray.
+    If no users are interested, returns a gray.
     """
-    s = frozenset(_normalize_users(interested_users))
-    return _COLOR_MAP.get(s, _DEFAULT_NODE_COLOR)
+    users_list = list(_normalize_users(interested_users))
+    return color_from_users(users_list, visible_users=visible_users)
 
 
 def node_to_ui(node: Dict) -> Dict:

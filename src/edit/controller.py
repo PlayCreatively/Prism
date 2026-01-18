@@ -44,7 +44,7 @@ class EditController:
         self._edges: List[Dict[str, Any]] = []
         self._node_positions: Dict[str, Tuple[float, float]] = {}
         self._node_sizes: Dict[str, float] = {}
-        self._active_user: str = 'Alex'
+        self._active_user: str = None  # Set dynamically
         self._on_state_change: Optional[Callable[[EditState], None]] = None
     
     @property

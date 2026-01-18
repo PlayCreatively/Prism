@@ -44,6 +44,7 @@ class DataManager:
     def load_user(self, user_id: str) -> Dict[str, Any]:
         """
         Load user file. Returns dict with 'nodes' as a Dictionary (UUID->State).
+        The user_id field is always set to match the requested user_id (filename).
         """
         path = self.data_dir / f"{user_id}.json"
         schema = {"user_id": user_id, "nodes": {}}
@@ -56,6 +57,9 @@ class DataManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # CRITICAL: Ensure user_id matches the filename, not what's stored inside
+                # This prevents bugs when files are copied/renamed
+                data["user_id"] = user_id
                 # Helper: If 'nodes' is a list (legacy leftover), handle gracefully-ish
                 if isinstance(data.get("nodes"), list):
                     # We can't easily auto-fix on read without logic, so let's assume
@@ -78,6 +82,54 @@ class DataManager:
     def list_users(self) -> List[str]:
         """Return list of user names based on files."""
         return [f.stem for f in self.data_dir.glob("*.json")]
+
+    def cleanup_orphan_nodes(self) -> int:
+        """
+        Remove nodes that have zero votes from any user.
+        
+        A node is considered an orphan if no user has an entry for it
+        (neither interested nor rejected).
+        
+        Returns:
+            Number of nodes removed.
+        """
+        g_data = self._load_global()
+        g_nodes = g_data.get("nodes", {})
+        
+        if not g_nodes:
+            return 0
+        
+        users = self.list_users()
+        if not users:
+            return 0
+        
+        # Collect all node IDs that have at least one user vote
+        voted_nodes = set()
+        for user_id in users:
+            user_data = self.load_user(user_id)
+            user_nodes = user_data.get("nodes", {})
+            voted_nodes.update(user_nodes.keys())
+        
+        # Find orphans (nodes with no votes)
+        orphan_ids = [nid for nid in g_nodes.keys() if nid not in voted_nodes]
+        
+        if not orphan_ids:
+            return 0
+        
+        # Remove orphans from global
+        for nid in orphan_ids:
+            del g_nodes[nid]
+            logger.info(f"Removed orphan node: {nid}")
+        
+        # Also update parent_id references for any nodes that pointed to removed nodes
+        for nid, node in g_nodes.items():
+            if node.get("parent_id") in orphan_ids:
+                node["parent_id"] = None
+        
+        g_data["nodes"] = g_nodes
+        self._save_global(g_data)
+        
+        return len(orphan_ids)
 
     # --- Core Graph Logic ---
 
@@ -285,20 +337,26 @@ class DataManager:
         """Populate with initial data if empty."""
         g_nodes = self._load_global().get("nodes", {})
         if not g_nodes:
-            # Create Users if not exist
-            for u in ["Alex", "Sasha", "Alison"]:
-                self.load_user(u) # creates file
+            # Get existing users or create a default user
+            existing_users = self.list_users()
+            if not existing_users:
+                # Create a default user if none exist
+                self.load_user("User1")  # creates file
+                existing_users = ["User1"]
                 
             print("Seeding demo data...")
-            root = self.add_node("Thesis Idea", users=["Alex", "Sasha", "Alison"])
+            root = self.add_node("Thesis Idea", users=existing_users)
             
             root_id = root['id']
             # Update root metadata for all
             self.update_node(root_id, metadata='# The Central Thesis\n\nThis is the core concept we are exploring.')
 
-            n1 = self.add_node("Serious Games", parent_id=root_id, users=["Alex"])
-            n2 = self.add_node("Human-Computer Interaction", parent_id=root_id, users=["Sasha"])
-            n3 = self.add_node("ML for Creativity", parent_id=root_id, users=["Alison"])
-            
-            self.add_node("Generative Art Tools", parent_id=n3['id'], users=["Alison", "Sasha"])
+            # Create child nodes - assign to first user if only one exists
+            first_user = existing_users[0] if existing_users else None
+            if first_user:
+                n1 = self.add_node("Serious Games", parent_id=root_id, users=[first_user])
+                n2 = self.add_node("Human-Computer Interaction", parent_id=root_id, users=[first_user])
+                n3 = self.add_node("ML for Creativity", parent_id=root_id, users=[first_user])
+                
+                self.add_node("Generative Art Tools", parent_id=n3['id'], users=[first_user])
 

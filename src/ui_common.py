@@ -134,7 +134,7 @@ def render_other_users_notes(
     Colors the header/border green for accepted users, red for rejected users.
     """
     if users is None:
-        users = ['Alex', 'Sasha', 'Alison']
+        users = data_manager.list_users() if hasattr(data_manager, 'list_users') else []
     
     other_users = [u for u in users if u != active_user]
     

@@ -33,7 +33,7 @@ class EditOverlay:
     def __init__(self):
         """Initialize overlay - call setup() after chart is created."""
         self._overlay_id = 'edit-overlay-container'
-        self._active_user = 'Alex'
+        self._active_user = None  # Set dynamically
         self._node_positions: Dict[str, Tuple[float, float]] = {}
         self._is_setup = False
         self._chart_element_id = None

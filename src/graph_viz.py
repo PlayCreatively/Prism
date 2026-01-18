@@ -1,27 +1,31 @@
 """
 Graph visualizer that produces an ECharts-compatible configuration for rendering
-a directed graph where node colors are computed from interested users (RGB model)
-and edges connecting "consensus" (white) nodes are highlighted.
+a directed graph where node colors are computed from interested users.
 
 This implementation uses NetworkX to manage the graph structure, but the output
 is a plain dict representing ECharts option/config which can be used with NiceGUI.
+
+The color system dynamically assigns colors based on visible users:
+- Each visible user gets an equal slice of the HSL color wheel
+- When all visible users are interested, the color approaches white
 """
 
 from typing import List, Dict, Any
 import networkx as nx
+from src.utils import color_from_users, get_visible_users
 
 
 class GraphVisualizer:
     """
     Build an ECharts configuration (dict) for a graph visualization based on nodes
     and edges. Node colors are computed from the interested_users list for each node
-    using additive RGB (Alex=Red, Sasha=Green, Alison=Blue).
+    using the dynamic HSL-based color system.
 
     Expected node input format (list of dicts):
       {
         "id": "<unique id>",
         "label": "<display label>",
-        "interested_users": ["Alex", "Sasha"]   # any subset of ["Alex","Sasha","Alison"]
+        "interested_users": ["User1", "User2"]   # any subset of visible users
       }
 
     Expected edge input format (list of dicts):
@@ -45,41 +49,21 @@ class GraphVisualizer:
       }
     """
 
-    # map normalized user name (lowercase) to rgb channel index
-    _USER_CHANNEL = {
-        "alex": (255, 0, 0),    # red
-        "sasha": (0, 255, 0),   # green
-        "alison": (0, 0, 255),  # blue
-    }
-
     def __init__(self):
         # placeholder for networkx graph instance
         self.G = nx.DiGraph()
 
     @staticmethod
     def _normalize_user(u: str) -> str:
-        return (u or "").strip().lower()
+        return (u or "").strip()
 
     @classmethod
-    def color_for_users(cls, users: List[str]) -> str:
+    def color_for_users(cls, users: List[str], visible_users: List[str] = None) -> str:
         """
-        Compute hex color string for a list of users using additive RGB.
+        Compute hex color string for a list of users using the dynamic color system.
         Returns color as lowercase hex string like '#ff00aa'.
-        Unknown users are ignored.
         """
-        r = g = b = 0
-        for u in users or []:
-            nu = cls._normalize_user(u)
-            ch = cls._USER_CHANNEL.get(nu)
-            if ch:
-                r += ch[0]
-                g += ch[1]
-                b += ch[2]
-        # clamp to 255
-        r = min(255, r)
-        g = min(255, g)
-        b = min(255, b)
-        return "#{:02x}{:02x}{:02x}".format(r, g, b)
+        return color_from_users(users, visible_users=visible_users)
 
     @staticmethod
     def _is_white_color(hex_color: str) -> bool:

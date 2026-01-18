@@ -68,11 +68,9 @@ except Exception:  # pragma: no cover - fallback for test environments
             self._seed_demo()
 
         def _seed_demo(self):
-            # Create three root-ish nodes for Alex, Sasha, Alison demonstration.
-            for name, users in [('Serious Games', ['Alex']),
-                                ('Human-Computer Interaction', ['Sasha']),
-                                ('ML for Creativity', ['Alison']),
-                                ('Collaborative Storytelling', ['Alex','Sasha','Alison'])]:
+            # Create demo nodes for testing - uses generic naming
+            demo_topics = ['Serious Games', 'Human-Computer Interaction', 'ML for Creativity', 'Collaborative Storytelling']
+            for name in demo_topics:
                 node_id = str(uuid.uuid4())
                 self.nodes[node_id] = {
                     'id': node_id,
@@ -80,11 +78,11 @@ except Exception:  # pragma: no cover - fallback for test environments
                     'parent_id': None,
                     'status': 'accepted',
                     'metadata': f'Auto-seeded node: {name}',
-                    'interested_users': users
+                    'interested_users': []
                 }
             # create links between them
             ids = list(self.nodes.keys())
-            if len(ids) >= 2:
+            if len(ids) >= 4:
                 self.edges.append({'source': ids[0], 'target': ids[3]})
                 self.edges.append({'source': ids[1], 'target': ids[3]})
                 self.edges.append({'source': ids[2], 'target': ids[3]})
@@ -156,7 +154,7 @@ except Exception:
     # We'll build our own conversion below if helper not present.
     node_to_echart_node = None
 
-from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba
+from src.utils import color_from_users, lighten_hex, darken_hex, hex_to_rgba, get_all_users, get_visible_users, get_hidden_users, toggle_user_visibility, get_user_color
 from src.ui_common import render_tri_state_buttons, render_editable_notes, render_other_users_notes
 from src.edit import EditController, EditOverlay, EditActions, setup_edit_handlers
 from src.chart_builder import build_echart_options, normalize_click_payload, resolve_node_id_from_payload, REQUESTED_EVENT_KEYS
@@ -164,8 +162,8 @@ from src.chart_builder import build_echart_options, normalize_click_payload, res
 
 # Initialize core managers
 data_manager = DataManager(data_dir="db/data")
-# DrillEngine expects a list of users, not the DataManager instance directly
-drill_engine = DrillEngine(users=['Alex', 'Sasha', 'Alison'])
+# DrillEngine expects a list of users - discover dynamically from data files
+drill_engine = DrillEngine(users=get_all_users())
 ai_agent = AIAgent()
 git_manager = GitManager(repo_path="db") if GitManager else None
 
@@ -181,6 +179,12 @@ try:
     # Real DataManager doesn't need explicit load(), it reads from disk on get_graph
     if hasattr(data_manager, 'load'):
         data_manager.load()
+    
+    # Cleanup orphan nodes (nodes with zero votes from any user)
+    if hasattr(data_manager, 'cleanup_orphan_nodes'):
+        orphan_count = data_manager.cleanup_orphan_nodes()
+        if orphan_count > 0:
+            print(f"Cleaned up {orphan_count} orphan nodes (no votes)")
         
     print("Data init complete.")
     g = data_manager.get_graph()
@@ -200,13 +204,19 @@ def main_page():
     
     # --- State & Closures ---
     
+    # Determine default active user dynamically
+    all_users_list = get_all_users()
+    stored_user = app.storage.user.get('active_user')
+    # Validate stored user still exists, otherwise pick first available
+    default_active_user = stored_user if stored_user in all_users_list else (all_users_list[0] if all_users_list else None)
+    
     # We use a container for mutable state to be accessible in closures
     state = {
         'selected_node_id': None,
         'chart': None,
         'details_container': None,
         'last_graph_hash': 0,
-        'active_user': app.storage.user.get('active_user', 'Alex'),
+        'active_user': default_active_user,
         'show_dead': app.storage.user.get('show_dead', False),
         'all_users_view': app.storage.user.get('all_users_view', False),
         'last_selection_time': 0,
@@ -404,7 +414,8 @@ def main_page():
         # Update Pending Badge
         if state.get('pending_badge_ui'):
             try:
-                count = len(get_pending_nodes(data_manager, state.get('active_user', 'Alex')))
+                active_user = state.get('active_user')
+                count = len(get_pending_nodes(data_manager, active_user)) if active_user else 0
                 state['pending_badge_ui'].text = str(count)
                 state['pending_badge_ui'].set_visibility(count > 0)
             except Exception:
@@ -428,8 +439,10 @@ def main_page():
     # --- Actions ---
 
     def set_active_user(user: str):
-        # Default to Alex if something goes wrong, never allow 'All'
-        state['active_user'] = user or 'Alex'
+        # Default to first available user if something goes wrong
+        all_users = get_all_users()
+        default_user = all_users[0] if all_users else None
+        state['active_user'] = user or default_user
         app.storage.user['active_user'] = state['active_user']
         refresh_chart_ui()
 
@@ -477,11 +490,16 @@ def main_page():
             reset_selection()
     
     
-    def set_vote(node_id, status, user="Alex"):
+    def set_vote(node_id, status, user=None):
         """
         Sets the vote status for a user.
         status: 'accepted' | 'rejected' | 'maybe'
         """
+        if user is None:
+            user = state.get('active_user')
+        if not user:
+            ui.notify('No active user selected', type='warning')
+            return
         try:
             if status == 'maybe':
                 data_manager.remove_user_node(user, node_id)
@@ -502,18 +520,24 @@ def main_page():
         show_node_details(node_id)
     
     
-    def toggle_interest(node_id, user="Alex"):
+    def toggle_interest(node_id, user=None):
         """Deprecated: Use set_vote instead"""
+        if user is None:
+            user = state.get('active_user')
         # ... logic preserved if any legacy calls remain, but redirecting to set_vote is safer
         # For now, implemented as compatibility wrapper if clicked blindly
         pass
         
     async def do_drill_action(node_id):
+        active_user = state.get('active_user')
+        if not active_user:
+            ui.notify('No active user selected', type='warning')
+            return
         await start_drill_process(
             node_id=node_id,
             data_manager=data_manager,
             ai_agent=ai_agent,
-            active_user=state.get('active_user', 'Alex'),
+            active_user=active_user,
             on_complete=refresh_chart_ui,
             temperature=state.get('temperature', 0.7)
         )
@@ -545,7 +569,10 @@ def main_page():
         - Label/Parent/Description changes are shared (update_shared_node).
         - Metadata/Interested are per-user (update_user_node).
         """
-        active_user = state.get('active_user', 'Alex')
+        active_user = state.get('active_user')
+        if not active_user:
+            ui.notify('No active user selected', type='warning')
+            return
         
         # Split changes
         shared_upd = {}
@@ -581,8 +608,8 @@ def main_page():
         generic_node = next((n for n in graph_data.get('nodes', []) if n['id'] == node_id), None)
         
         # 2. Get the specific user node for private properties (Metadata, Status)
-        active_user = state.get('active_user', 'Alex')
-        user_node = data_manager.get_user_node(active_user, node_id)
+        active_user = state.get('active_user')
+        user_node = data_manager.get_user_node(active_user, node_id) if active_user else None
         
         # Display logic needs valid generic_node at minimum
         if not generic_node:
@@ -624,26 +651,24 @@ def main_page():
                     interested_set = set(generic_node.get('interested_users', []))
                     rejected_set = set(generic_node.get('rejected_users', []))
                     
-                    # User-specific text color classes (Tailwind)
-                    user_text_colors = {
-                        'Alex': 'text-red-400', 
-                        'Sasha': 'text-green-400', 
-                        'Alison': 'text-blue-400'
-                    }
+                    # Get all users and their dynamic colors
+                    all_users = get_all_users()
+                    visible_users = get_visible_users()
 
-                    for user in ['Alex', 'Sasha', 'Alison']:
-                        txt_cls = user_text_colors.get(user, '')
+                    for user in all_users:
+                        # Get user's dynamic color
+                        user_color = get_user_color(user, visible_users)
                         
                         if user in interested_set:
                             with ui.chip(icon='check', color='green').props('outline size=sm'):
-                                ui.label(user).classes(txt_cls)
+                                ui.label(user).style(f'color: {user_color}')
                         elif user in rejected_set:
                             with ui.chip(icon='close', color='red').props('outline size=sm'):
-                                ui.label(user).classes(txt_cls)
+                                ui.label(user).style(f'color: {user_color}')
                         else:
                             # Grayed out / Question mark
                             with ui.chip(icon='help_outline', color='grey').props('outline size=sm').classes('opacity-40'):
-                                ui.label(user).classes('') # No specific user color for pending/gray state
+                                ui.label(user).classes('text-gray-400')  # Gray for pending/unknown state
 
             # Description (shared across all users)
             description_input = ui.textarea('Description', value=generic_node.get('description', '')).classes('w-full')
@@ -711,11 +736,13 @@ def main_page():
             # Actions
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
             with ui.row().classes('w-full gap-2 justify-between'):
-                # Drill only visible if full consensus (Alex, Sasha, Alison)
+                # Drill only visible if full consensus (all visible users interested)
                 current_interested = set(generic_node.get('interested_users', []))
+                visible_users_set = set(get_visible_users())
                 
-                # Consensus Drill Button
-                if state.get('test_mode') or {'Alex', 'Sasha', 'Alison'}.issubset(current_interested):
+                # Consensus Drill Button - requires all visible users to be interested
+                has_consensus = visible_users_set and visible_users_set.issubset(current_interested)
+                if state.get('test_mode') or has_consensus:
                     ui.button('Drill', on_click=lambda: do_drill_action(node_id)).props('icon=hub')
                 
                 # Voting Controls (Tri-state)
@@ -837,12 +864,68 @@ def main_page():
         with ui.column().classes('gap-0'):
             ui.label('PRISM').classes('text-lg font-bold leading-none text-white')
             ui.label('Consensus Graph').classes('text-xs text-gray-400 leading-none')
+        
+        # "Acting as User" dropdown - dynamically populated
+        all_users = get_all_users()
+        default_user = state['active_user'] if state['active_user'] in all_users else (all_users[0] if all_users else None)
+        if default_user and default_user != state['active_user']:
+            state['active_user'] = default_user
+            app.storage.user['active_user'] = default_user
+        
         user_select = ui.select(
-            ['Alex', 'Sasha', 'Alison'], # Removed 'All'
+            all_users,
             value=state['active_user'],
             label='Acting as User'
         ).props('dense outlined').classes('w-32')
         user_select.on('update:model-value', lambda e: set_active_user(user_select.value))
+        
+        # User Visibility Filter dropdown
+        def build_user_filter_options():
+            """Build options for user visibility filter with colored labels."""
+            all_u = get_all_users()
+            visible_u = get_visible_users()
+            hidden_u = get_hidden_users()
+            options = []
+            for u in all_u:
+                is_hidden = u in hidden_u
+                color = '#808080' if is_hidden else get_user_color(u, visible_u)
+                options.append({'label': u, 'value': u, 'color': color, 'hidden': is_hidden})
+            return options
+        
+        # Custom filter dropdown using expansion
+        with ui.dropdown_button('Filter Users', icon='filter_alt').props('flat dense color=secondary'):
+            filter_container = ui.column().classes('gap-0 min-w-32')
+            
+            def rebuild_filter_ui():
+                filter_container.clear()
+                all_u = get_all_users()
+                visible_u = get_visible_users()
+                hidden_u = get_hidden_users()
+                
+                if not all_u:
+                    with filter_container:
+                        ui.label('No users found').classes('text-gray-400 text-sm p-2')
+                    return
+                
+                with filter_container:
+                    for u in all_u:
+                        is_hidden = u in hidden_u
+                        color = '#808080' if is_hidden else get_user_color(u, visible_u)
+                        
+                        def make_toggle_handler(user_id):
+                            def handler():
+                                toggle_user_visibility(user_id)
+                                rebuild_filter_ui()
+                                refresh_chart_ui()
+                            return handler
+                        
+                        with ui.item(on_click=make_toggle_handler(u)).classes('cursor-pointer'):
+                            with ui.item_section().props('avatar'):
+                                ui.icon('visibility' if not is_hidden else 'visibility_off').style(f'color: {color}')
+                            with ui.item_section():
+                                ui.label(u).style(f'color: {color}')
+            
+            rebuild_filter_ui()
         
         # Git Push Button (Context sensitive)
         with ui.button(on_click=do_git_push).props('flat dense color=accent icon=cloud_upload').classes('hidden') as btn:
@@ -854,9 +937,13 @@ def main_page():
         
         # Review Pending Button (Placeholder for now)
         async def do_review():
+             active_user = state.get('active_user')
+             if not active_user:
+                 ui.notify('No active user selected', type='warning')
+                 return
              await start_review_process(
                  data_manager, 
-                 state.get('active_user', 'Alex'), 
+                 active_user, 
                  on_complete=refresh_chart_ui
              )
 
