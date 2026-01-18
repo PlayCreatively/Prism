@@ -176,12 +176,6 @@ if multiprocessing.current_process().name == 'MainProcess':
     try:
         print("Initializing DataManager...")
         
-        # Auto-migrate from legacy global.json if needed
-        if hasattr(data_manager, 'migrate_from_global_json'):
-            migrated = data_manager.migrate_from_global_json()
-            if migrated > 0:
-                print(f"Migrated {migrated} nodes to individual files")
-        
         if hasattr(data_manager, 'seed_demo_data'):
             # Only seed if empty
             g_check = data_manager.get_graph()

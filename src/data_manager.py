@@ -11,7 +11,7 @@ class DataManager:
     Manages global graph structure and per-user state files.
     
     Structure:
-    - db/global.json: Source of truth for Nodes (UUID, Label, Parent).
+    - db/nodes/*: Source of truth for Nodes (UUID, Label, Parent).
     - db/data/{user}.json: User state (UUID -> {Interested, Metadata}).
     
     The 'get_graph' method performs a join between global structure and user files.
@@ -19,7 +19,6 @@ class DataManager:
 
     def __init__(self, data_dir: str = "db/data"):
         self.data_dir = Path(data_dir)
-        self.global_path = self.data_dir.parent / "global.json"
         self.nodes_dir = self.data_dir.parent / "nodes"
         
         # Ensure directories exist
@@ -32,7 +31,6 @@ class DataManager:
         """
         Load the global graph structure.
         Nodes are loaded from individual files in db/nodes/.
-        Metadata (hidden_users, positions) is loaded from global.json.
         """
         # Load nodes from individual files
         nodes = {}
@@ -45,36 +43,18 @@ class DataManager:
             except Exception as e:
                 logger.warning(f"Failed to load node file {node_file}: {e}")
         
-        # Load metadata from global.json
-        metadata = {}
-        if self.global_path.exists():
-            try:
-                with open(self.global_path, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-            except Exception:
-                pass
-        
-        # Return combined structure (metadata + nodes)
-        result = {k: v for k, v in metadata.items() if k != "nodes"}
-        result["nodes"] = nodes
-        return result
+        return {"nodes": nodes}
 
     def _save_global(self, data: Dict[str, Any]) -> None:
         """
         Save the global graph structure.
         Nodes are saved to individual files in db/nodes/.
-        Metadata (hidden_users, positions) is saved to global.json.
         """
         nodes = data.get("nodes", {})
         
         # Save each node to its own file
         for node_id, node_data in nodes.items():
             self._save_node(node_id, node_data)
-        
-        # Save metadata (everything except nodes) to global.json
-        metadata = {k: v for k, v in data.items() if k != "nodes"}
-        with open(self.global_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
     
     def _save_node(self, node_id: str, node_data: Dict[str, Any]) -> None:
         """Save a single node to its individual file."""
@@ -87,45 +67,6 @@ class DataManager:
         node_path = self.nodes_dir / f"{node_id}.json"
         if node_path.exists():
             node_path.unlink()
-    
-    def migrate_from_global_json(self) -> int:
-        """
-        Migrate nodes from legacy global.json to individual files.
-        Returns the number of nodes migrated.
-        """
-        if not self.global_path.exists():
-            return 0
-        
-        try:
-            with open(self.global_path, "r", encoding="utf-8") as f:
-                legacy_data = json.load(f)
-        except Exception:
-            return 0
-        
-        legacy_nodes = legacy_data.get("nodes", {})
-        if not legacy_nodes:
-            return 0
-        
-        # Check if already migrated (nodes dir has files)
-        existing_node_files = list(self.nodes_dir.glob("*.json"))
-        if existing_node_files:
-            logger.info("Nodes already migrated, skipping.")
-            return 0
-        
-        # Migrate each node to its own file
-        count = 0
-        for node_id, node_data in legacy_nodes.items():
-            self._save_node(node_id, node_data)
-            count += 1
-            logger.info(f"Migrated node: {node_id}")
-        
-        # Update global.json to remove nodes (keep only metadata)
-        metadata = {k: v for k, v in legacy_data.items() if k != "nodes"}
-        with open(self.global_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"Migration complete: {count} nodes migrated to individual files.")
-        return count
 
     def load_user(self, user_id: str) -> Dict[str, Any]:
         """

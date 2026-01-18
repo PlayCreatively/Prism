@@ -78,21 +78,7 @@ Each idea is stored as an individual file, enabling conflict-free concurrent cre
     }
     ```
 
-**2. Global Metadata (`db/global.json`)**
-Stores non-node configuration and UI state.
-*   **Scope:** Shared by all users.
-*   **Content:** UI preferences, hidden users, layout positions.
-*   **Schema:**
-    ```json
-    {
-      "hidden_users": ["Alison", "Kevin"],
-      "positions": {
-        "uuid_v4": [0.5, 0.3]
-      }
-    }
-    ```
-
-**3. User State Files (`db/data/{user}.json`)**
+**2. User State Files (`db/data/{user}.json`)**
 Stores the specific relationship between a user and the nodes.
 *   **Scope:** One file per user (e.g., `Alex.json`, `Sasha.json`).
 *   **Content:** "Votes", Metadata, and Interest flags.
@@ -137,7 +123,7 @@ The system supports converting the complex UUID-bound graph into generic Project
 
 *   **Export to Template:** Converts the Graph into a **Label Tree** (Nested JSON structure), stripping all UUIDs and User Data.
     *   *Result:* A clean, shareable file representing just the ideas hierarchy.
-*   **Import from Template:** Ingests a Label Tree, generates **Fresh UUIDs**, and seeds a new `global.json`.
+*   **Import from Template:** Ingests a Label Tree, generates **Fresh UUIDs**, and seeds new node files in `db/nodes/`.
     *   *Use Case:* "Cloning" a successful brainstorming structure to start a new project with a clean slate.
 
 ---
@@ -227,12 +213,6 @@ Users can directly manipulate the graph structure through visual interactions wh
     *   **Trigger:** Ctrl + Drag node near another node (within connection radius)
     *   **Behavior:** Creates parent-child relationship
     *   **Preservation:** Existing connections are maintained
-
-**Position Persistence:**
-*   Node positions are automatically saved to `db/global.json` in the `positions` field
-*   Positions use normalized coordinates [0,1] range
-*   Manual layouts survive application restarts
-*   Position conflicts in git are resolved via last-write-wins (rare due to infrequent structural edits)
 
 ### Workflow E: Manual Maintenance
 *   **Edit Node:** Users can manually rename nodes or add metadata/context text. This is crucial for guiding the AI in future "Drill Downs."

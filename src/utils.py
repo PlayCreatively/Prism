@@ -31,68 +31,55 @@ def get_all_users(data_dir: str = "db/data") -> List[str]:
     return users
 
 
-def get_hidden_users(global_path: str = "db/global.json") -> set:
+def get_hidden_users() -> set:
     """
     Load the set of hidden users from global settings.
     """
-    path = Path(global_path)
-    if not path.exists():
+    # Use NiceGUI per-user storage only (no file fallback)
+    from nicegui import app as _ng_app
+    storage_hidden = _ng_app.storage.user.get('hidden_users')
+    if storage_hidden is None:
         return set()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            hidden = data.get("hidden_users", [])
-            _user_settings_cache['hidden_users'] = set(hidden)
-            return set(hidden)
-    except Exception:
-        return set()
+    hidden = set(storage_hidden) if isinstance(storage_hidden, (list, set, tuple)) else set()
+    _user_settings_cache['hidden_users'] = hidden
+    return hidden
 
 
-def set_hidden_users(hidden_users: set, global_path: str = "db/global.json") -> None:
+def set_hidden_users(hidden_users: set) -> None:
     """
     Save the set of hidden users to global settings.
     """
-    path = Path(global_path)
-    data = {}
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            pass
-    
-    data["hidden_users"] = list(hidden_users)
-    _user_settings_cache['hidden_users'] = hidden_users
-    
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    # Write to NiceGUI per-user storage only (no file fallback)
+    from nicegui import app as _ng_app
+    _ng_app.storage.user['hidden_users'] = list(hidden_users)
+    _user_settings_cache['hidden_users'] = set(hidden_users)
 
 
-def get_visible_users(data_dir: str = "db/data", global_path: str = "db/global.json") -> List[str]:
+def get_visible_users(data_dir: str = "db/data") -> List[str]:
     """
     Return list of users that are not hidden.
     """
     all_users = get_all_users(data_dir)
-    hidden = get_hidden_users(global_path)
+    hidden = get_hidden_users()
     return [u for u in all_users if u not in hidden]
 
 
-def toggle_user_visibility(user_id: str, global_path: str = "db/global.json") -> bool:
+def toggle_user_visibility(user_id: str) -> bool:
     """
     Toggle a user's visibility. Returns True if user is now visible, False if hidden.
     """
-    hidden = get_hidden_users(global_path)
+    hidden = get_hidden_users()
     if user_id in hidden:
         hidden.discard(user_id)
         is_visible = True
     else:
         hidden.add(user_id)
         is_visible = False
-    set_hidden_users(hidden, global_path)
+    set_hidden_users(hidden)
     return is_visible
 
 
-def get_user_color(user_id: str, visible_users: Optional[List[str]] = None, data_dir: str = "db/data", global_path: str = "db/global.json") -> str:
+def get_user_color(user_id: str, visible_users: Optional[List[str]] = None, data_dir: str = "db/data") -> str:
     """
     Get the assigned color for a specific user based on their position in the visible users list.
     
@@ -110,7 +97,7 @@ def get_user_color(user_id: str, visible_users: Optional[List[str]] = None, data
     Returns hex color string.
     """
     if visible_users is None:
-        visible_users = get_visible_users(data_dir, global_path)
+        visible_users = get_visible_users(data_dir)
     
     if not visible_users or user_id not in visible_users:
         return '#808080'  # Gray for hidden/unknown users
@@ -144,7 +131,7 @@ def get_user_color(user_id: str, visible_users: Optional[List[str]] = None, data
     return '#{:02x}{:02x}{:02x}'.format(int(r * 255), int(g * 255), int(b * 255))
 
 
-def color_from_users(users: List[str], visible_users: Optional[List[str]] = None, data_dir: str = "db/data", global_path: str = "db/global.json") -> str:
+def color_from_users(users: List[str], visible_users: Optional[List[str]] = None, data_dir: str = "db/data") -> str:
     """
     Calculate the combined color for a set of interested users.
     
@@ -162,13 +149,12 @@ def color_from_users(users: List[str], visible_users: Optional[List[str]] = None
         users: List of user IDs who are interested in this node
         visible_users: Optional pre-computed list of visible users
         data_dir: Path to user data directory
-        global_path: Path to global settings file
     
     Returns:
         Hex color string
     """
     if visible_users is None:
-        visible_users = get_visible_users(data_dir, global_path)
+        visible_users = get_visible_users(data_dir)
     
     if not visible_users:
         return '#d0d0d0'  # Light gray if no visible users

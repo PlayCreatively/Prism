@@ -147,8 +147,8 @@ class GitManager:
         # If GitManager is initialized with repo_path="db", and db contains "data", this works.
         self._run(['git', 'add', f'data/{user}.json'])
         
-        # 2. Stage global data
-        self._run(['git', 'add', 'global.json'])
+        # 2. Stage node files
+        self._run(['git', 'add', 'nodes/'])
 
     def push_changes_for_user(self, user: str):
         """
