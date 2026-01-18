@@ -981,10 +981,6 @@ def main_page():
                 ui.label('Temp:').classes('text-xs text-gray-400')
                 ui.number(value=state['temperature'], min=0.0, max=2.0, step=0.1, on_change=update_temp).props('dense outlined style="width: 60px"').tooltip('AI Temperature')
 
-        # Layout Reset control
-        if nx:
-             ui.button(icon='grid_goldenratio', on_click=lambda: (run_layout(force_reset=True), refresh_chart_ui())).props('flat round dense color=grey').tooltip('Reset Graph Layout')
-
     # 3. Context Panel
     # Starts hidden (visible=False). content triggers visibility.
     state['context_card'] = ui.card().classes('fixed right-6 top-6 w-96 max-h-[90vh] overflow-y-auto z-20 shadow-2xl flex flex-col gap-4 bg-slate-900/95 backdrop-blur-md border-t-4 border-primary border-x border-b border-slate-700')
