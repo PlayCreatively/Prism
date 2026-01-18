@@ -10,6 +10,7 @@ implementations are provided so the app can still start for testing.
 
 from nicegui import ui, run, app
 from typing import Dict, List, Any
+import sys
 import uuid
 import time
 import threading
@@ -20,6 +21,7 @@ except ImportError:
 
 from dotenv import load_dotenv
 load_dotenv()
+import multiprocessing
 
 # Global Styles
 ui.add_head_html('''
@@ -167,32 +169,42 @@ drill_engine = DrillEngine(users=get_all_users())
 ai_agent = AIAgent()
 git_manager = GitManager(repo_path="db") if GitManager else None
 
-# Load data at startup
-try:
-    print("Initializing DataManager...")
-    if hasattr(data_manager, 'seed_demo_data'):
-        # Only seed if empty
-        g_check = data_manager.get_graph()
-        if not g_check.get('nodes'):
-             data_manager.seed_demo_data()
-    
-    # Real DataManager doesn't need explicit load(), it reads from disk on get_graph
-    if hasattr(data_manager, 'load'):
-        data_manager.load()
-    
-    # Cleanup orphan nodes (nodes with zero votes from any user)
-    if hasattr(data_manager, 'cleanup_orphan_nodes'):
-        orphan_count = data_manager.cleanup_orphan_nodes()
-        if orphan_count > 0:
-            print(f"Cleaned up {orphan_count} orphan nodes (no votes)")
+# Load data at startup, but only in the main process to avoid repeated
+# initialization when PyInstaller's bootloader / runtime hooks spawn
+# helper interpreter processes.
+if multiprocessing.current_process().name == 'MainProcess':
+    try:
+        print("Initializing DataManager...")
         
-    print("Data init complete.")
-    g = data_manager.get_graph()
-    print(f"Graph stats: {len(g.get('nodes', []))} nodes, {len(g.get('edges', []))} edges")
-except Exception as e:
-    import traceback
-    traceback.print_exc()
-    print(f"Error loading data: {e}")
+        # Auto-migrate from legacy global.json if needed
+        if hasattr(data_manager, 'migrate_from_global_json'):
+            migrated = data_manager.migrate_from_global_json()
+            if migrated > 0:
+                print(f"Migrated {migrated} nodes to individual files")
+        
+        if hasattr(data_manager, 'seed_demo_data'):
+            # Only seed if empty
+            g_check = data_manager.get_graph()
+            if not g_check.get('nodes'):
+                data_manager.seed_demo_data()
+
+        # Real DataManager doesn't need explicit load(), it reads from disk on get_graph
+        if hasattr(data_manager, 'load'):
+            data_manager.load()
+
+        # Cleanup orphan nodes (nodes with zero votes from any user)
+        if hasattr(data_manager, 'cleanup_orphan_nodes'):
+            orphan_count = data_manager.cleanup_orphan_nodes()
+            if orphan_count > 0:
+                print(f"Cleaned up {orphan_count} orphan nodes (no votes)")
+
+        print("Data init complete.")
+        g = data_manager.get_graph()
+        print(f"Graph stats: {len(g.get('nodes', []))} nodes, {len(g.get('edges', []))} edges")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Error loading data: {e}")
 
 
 
@@ -985,5 +997,5 @@ def main_page():
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    ui.run(title='PRISM', port=8081, reload=True, storage_secret='prism_secret_key_123')
+    ui.run(title='PRISM', port=8081, reload=not getattr(sys, 'frozen', False), storage_secret='prism_secret_key_123')
 

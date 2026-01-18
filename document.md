@@ -61,32 +61,38 @@ The visual language extends beyond consensus color to reflect the Active User's 
 
 ## 3. System Architecture
 
-### 3.1 Data Persistence (Hybrid Relational Model)
-The system uses a normalized data architecture to separate **Graph Structure** (Global Truth) from **User State** (Individual Context). This eliminates the need for complex distributed conflict resolution while maintaining user autonomy.
+### 3.1 Data Persistence (Conflict-Free Multi-File Model)
+The system uses a normalized data architecture with **file-per-node storage** to eliminate merge conflicts during concurrent idea creation.
 
-**1. The Global Graph (`db/global.json`)**
-The "Single Source of Truth" for the topology of the idea map.
-*   **Scope:** Shared by all users.
-*   **Content:** Defines *what* exists and how it connects.
+**1. Node Files (`db/nodes/{uuid}.json`)**
+Each idea is stored as an individual file, enabling conflict-free concurrent creation.
+*   **Scope:** One file per node, shared by all users.
+*   **Benefit:** Two users adding nodes simultaneously create two separate files — **zero merge conflicts**.
 *   **Schema:**
     ```json
     {
-      "nodes": {
-        "uuid_v4": {
-          "id": "uuid_v4",
-          "label": "Serious Games",
-          "parent_id": "root_uuid",
-          "description": "Optional markdown description"
-        }
-      },
+      "id": "uuid_v4",
+      "label": "Serious Games",
+      "parent_id": "root_uuid",
+      "description": "Optional markdown description"
+    }
+    ```
+
+**2. Global Metadata (`db/global.json`)**
+Stores non-node configuration and UI state.
+*   **Scope:** Shared by all users.
+*   **Content:** UI preferences, hidden users, layout positions.
+*   **Schema:**
+    ```json
+    {
+      "hidden_users": ["Alison", "Kevin"],
       "positions": {
         "uuid_v4": [0.5, 0.3]
       }
     }
     ```
-    *   **positions:** Optional field storing normalized [x, y] coordinates for manual layout persistence
 
-**2. User State Files (`db/data/{user}.json`)**
+**3. User State Files (`db/data/{user}.json`)**
 Stores the specific relationship between a user and the nodes.
 *   **Scope:** One file per user (e.g., `Alex.json`, `Sasha.json`).
 *   **Content:** "Votes", Metadata, and Interest flags.
@@ -103,25 +109,26 @@ Stores the specific relationship between a user and the nodes.
     }
     ```
 
-**3. Runtime Composition**
+**4. Runtime Composition**
 On startup or refresh, the system performs a **Join Operation**:
-`Graph = Global Nodes + (join) All User Files`
+`Graph = All Node Files + (join) All User Files`
 *   **Interested Users List:** derived dynamically by checking which users have `interested: true` for a given UUID.
-*   **Pending Status:** derived if a Node exists in Global but is missing from the Active User's file.
+*   **Pending Status:** derived if a Node exists but is missing from the Active User's file.
 
 ### 3.2 Collaboration & Git Automations
 The tool handles Git operations semi-automatically to ensure users are always looking at the latest map.
 
 1.  **Auto-Sync on Launch:** Upon opening the tool, it attempts a `git pull --rebase`.
     *   *Success:* The latest data is loaded.
-    *   *Conflict:* The system alerts the user to resolve conflicts manually in the terminal/VS Code (rare, given the file separation).
+    *   *Conflict:* Extremely rare due to file-per-node architecture.
 2.  **Edit & Push:** Users work locally.
 3.  **Post-Session Prompt:** After a "Drilling Session" is marked complete, the tool prompts: *"You have made changes. Push to team?"*
 
 ### 3.3 Atomic Updates & Synchronization
-By separating structure from state, synchronization conflicts are minimized.
+The multi-file architecture makes synchronization conflicts nearly impossible.
 
-*   **Structural Edits (Rename/Move):** Update `global.json`. Since this is a single file, standard Git merge logic handles resolution if two people rename the same node simultaneously.
+*   **New Idea Creation:** Creates a new file in `db/nodes/`. Two users adding ideas simultaneously create separate files — **zero merge conflicts**.
+*   **Structural Edits (Rename/Move):** Updates the individual node file. Conflicts only possible if two users edit the *same* node simultaneously (rare).
 *   **State Edits (Vote/Note):** Update `user.json`. Since users only write to their own file, **Merge Conflicts are impossible** for voting operations.
 *   **The "Mutation Ledger":** (Deprecated) The previous complex event-sourcing ledger has been removed in favor of this normalized architecture.
 

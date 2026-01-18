@@ -20,26 +20,112 @@ class DataManager:
     def __init__(self, data_dir: str = "db/data"):
         self.data_dir = Path(data_dir)
         self.global_path = self.data_dir.parent / "global.json"
+        self.nodes_dir = self.data_dir.parent / "nodes"
         
         # Ensure directories exist
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.nodes_dir.mkdir(parents=True, exist_ok=True)
         
     # --- File I/O Helpers ---
 
     def _load_global(self) -> Dict[str, Any]:
-        """Load the global graph structure."""
-        if not self.global_path.exists():
-            return {"nodes": {}}
-        try:
-            with open(self.global_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {"nodes": {}}
+        """
+        Load the global graph structure.
+        Nodes are loaded from individual files in db/nodes/.
+        Metadata (hidden_users, positions) is loaded from global.json.
+        """
+        # Load nodes from individual files
+        nodes = {}
+        for node_file in self.nodes_dir.glob("*.json"):
+            try:
+                with open(node_file, "r", encoding="utf-8") as f:
+                    node_data = json.load(f)
+                    node_id = node_data.get("id", node_file.stem)
+                    nodes[node_id] = node_data
+            except Exception as e:
+                logger.warning(f"Failed to load node file {node_file}: {e}")
+        
+        # Load metadata from global.json
+        metadata = {}
+        if self.global_path.exists():
+            try:
+                with open(self.global_path, "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+            except Exception:
+                pass
+        
+        # Return combined structure (metadata + nodes)
+        result = {k: v for k, v in metadata.items() if k != "nodes"}
+        result["nodes"] = nodes
+        return result
 
     def _save_global(self, data: Dict[str, Any]) -> None:
-        """Save the global graph structure."""
+        """
+        Save the global graph structure.
+        Nodes are saved to individual files in db/nodes/.
+        Metadata (hidden_users, positions) is saved to global.json.
+        """
+        nodes = data.get("nodes", {})
+        
+        # Save each node to its own file
+        for node_id, node_data in nodes.items():
+            self._save_node(node_id, node_data)
+        
+        # Save metadata (everything except nodes) to global.json
+        metadata = {k: v for k, v in data.items() if k != "nodes"}
         with open(self.global_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+    
+    def _save_node(self, node_id: str, node_data: Dict[str, Any]) -> None:
+        """Save a single node to its individual file."""
+        node_path = self.nodes_dir / f"{node_id}.json"
+        with open(node_path, "w", encoding="utf-8") as f:
+            json.dump(node_data, f, indent=2, ensure_ascii=False)
+    
+    def _delete_node_file(self, node_id: str) -> None:
+        """Delete a node's individual file."""
+        node_path = self.nodes_dir / f"{node_id}.json"
+        if node_path.exists():
+            node_path.unlink()
+    
+    def migrate_from_global_json(self) -> int:
+        """
+        Migrate nodes from legacy global.json to individual files.
+        Returns the number of nodes migrated.
+        """
+        if not self.global_path.exists():
+            return 0
+        
+        try:
+            with open(self.global_path, "r", encoding="utf-8") as f:
+                legacy_data = json.load(f)
+        except Exception:
+            return 0
+        
+        legacy_nodes = legacy_data.get("nodes", {})
+        if not legacy_nodes:
+            return 0
+        
+        # Check if already migrated (nodes dir has files)
+        existing_node_files = list(self.nodes_dir.glob("*.json"))
+        if existing_node_files:
+            logger.info("Nodes already migrated, skipping.")
+            return 0
+        
+        # Migrate each node to its own file
+        count = 0
+        for node_id, node_data in legacy_nodes.items():
+            self._save_node(node_id, node_data)
+            count += 1
+            logger.info(f"Migrated node: {node_id}")
+        
+        # Update global.json to remove nodes (keep only metadata)
+        metadata = {k: v for k, v in legacy_data.items() if k != "nodes"}
+        with open(self.global_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Migration complete: {count} nodes migrated to individual files.")
+        return count
 
     def load_user(self, user_id: str) -> Dict[str, Any]:
         """
@@ -116,8 +202,9 @@ class DataManager:
         if not orphan_ids:
             return 0
         
-        # Remove orphans from global
+        # Remove orphans - delete individual node files
         for nid in orphan_ids:
+            self._delete_node_file(nid)
             del g_nodes[nid]
             logger.info(f"Removed orphan node: {nid}")
         
@@ -125,10 +212,9 @@ class DataManager:
         for nid, node in g_nodes.items():
             if node.get("parent_id") in orphan_ids:
                 node["parent_id"] = None
+                self._save_node(nid, node)  # Save updated parent reference
         
-        g_data["nodes"] = g_nodes
-        self._save_global(g_data)
-        
+        # Save updated metadata (orphan removal doesn't need full _save_global)
         return len(orphan_ids)
 
     # --- Core Graph Logic ---
@@ -205,8 +291,7 @@ class DataManager:
         Adds node to Global graph.
         Optionally initializes user states (e.g. setting them as interested).
         """
-        # 1. Update Global
-        g_data = self._load_global()
+        # 1. Create and save node directly to its own file
         node_id = str(uuid.uuid4())
         
         new_node_global = {
@@ -215,8 +300,7 @@ class DataManager:
             "parent_id": parent_id,
             "description": description
         }
-        g_data["nodes"][node_id] = new_node_global
-        self._save_global(g_data)
+        self._save_node(node_id, new_node_global)
         
         # 2. Update Users
         target_users = users if users else []
@@ -265,19 +349,20 @@ class DataManager:
         """
         g_data = self._load_global()
         if node_id in g_data["nodes"]:
+            node = g_data["nodes"][node_id]
             changed = False
             if "label" in kwargs:
-                g_data["nodes"][node_id]["label"] = kwargs["label"]
+                node["label"] = kwargs["label"]
                 changed = True
             if "parent_id" in kwargs:
-                g_data["nodes"][node_id]["parent_id"] = kwargs["parent_id"]
+                node["parent_id"] = kwargs["parent_id"]
                 changed = True
             if "description" in kwargs:
-                g_data["nodes"][node_id]["description"] = kwargs["description"]
+                node["description"] = kwargs["description"]
                 changed = True
             
             if changed:
-                self._save_global(g_data)
+                self._save_node(node_id, node)
 
     def remove_user_node(self, user_id: str, node_id: str) -> None:
         """

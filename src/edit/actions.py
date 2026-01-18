@@ -39,19 +39,15 @@ class EditActions:
         """
         node_id = str(uuid.uuid4())
         
-        # Add to global structure
-        global_data = self.data_manager._load_global()
-        if 'nodes' not in global_data:
-            global_data['nodes'] = {}
-        
-        global_data['nodes'][node_id] = {
+        # Create new node and save directly to its own file
+        new_node = {
             'id': node_id,
             'label': label,
             'parent_id': parent_id,
             'description': ''
         }
         
-        self.data_manager._save_global(global_data)
+        self.data_manager._save_node(node_id, new_node)
         
         # Set user vote (auto-vote interested)
         user_data = self.data_manager.load_user(active_user)
@@ -103,7 +99,7 @@ class EditActions:
             print(f"[create_intermediary_node] Created intermediary node: {intermediary_id[:8]}...")
             print(f"[create_intermediary_node] Updated target's parent: {old_parent[:8] if old_parent else 'None'}... -> {intermediary_id[:8]}...")
             nodes[target_id]['parent_id'] = intermediary_id
-            self.data_manager._save_global(global_data)
+            self.data_manager._save_node(target_id, nodes[target_id])
         
         return intermediary_id
     
@@ -116,7 +112,7 @@ class EditActions:
             return False
         
         nodes[source_id]['parent_id'] = target_id
-        self.data_manager._save_global(global_data)
+        self.data_manager._save_node(source_id, nodes[source_id])
         
         return True
     
@@ -132,11 +128,10 @@ class EditActions:
         for nid, node in nodes.items():
             if node.get('parent_id') == node_id:
                 node['parent_id'] = None
+                self.data_manager._save_node(nid, node)
         
-        # Remove the node
-        del nodes[node_id]
-        
-        self.data_manager._save_global(global_data)
+        # Remove the node file
+        self.data_manager._delete_node_file(node_id)
         
         # Remove from all user files
         users_dir = self.data_manager.data_dir
@@ -162,7 +157,7 @@ class EditActions:
             # Try swapping - maybe the edge direction is reversed
             if target_id in nodes and nodes[target_id].get('parent_id') == source_id:
                 nodes[target_id]['parent_id'] = None
-                self.data_manager._save_global(global_data)
+                self.data_manager._save_node(target_id, nodes[target_id])
                 return True
             return False
         
@@ -171,13 +166,13 @@ class EditActions:
         
         if actual_parent == target_id:
             nodes[source_id]['parent_id'] = None
-            self.data_manager._save_global(global_data)
+            self.data_manager._save_node(source_id, nodes[source_id])
             return True
         
         # Try swapping if the edge direction is reversed
         if target_id in nodes and nodes[target_id].get('parent_id') == source_id:
             nodes[target_id]['parent_id'] = None
-            self.data_manager._save_global(global_data)
+            self.data_manager._save_node(target_id, nodes[target_id])
             return True
         
         return False
@@ -238,11 +233,12 @@ class EditActions:
             if dragging_id in nodes:
                 # Dragged node's parent becomes the original parent (source)
                 nodes[dragging_id]['parent_id'] = source_id
+                self.data_manager._save_node(dragging_id, nodes[dragging_id])
                 # Child's parent becomes the dragged node
                 if target_id in nodes:
                     print(f"[make_intermediary] Inserting {dragging_id[:8]}... between {source_id[:8]}... and {target_id[:8]}...")
                     nodes[target_id]['parent_id'] = dragging_id
-                self.data_manager._save_global(global_data)
+                    self.data_manager._save_node(target_id, nodes[target_id])
                 return dragging_id
         
         elif action == 'connect_nodes':
