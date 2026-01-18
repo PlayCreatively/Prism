@@ -283,6 +283,8 @@ def main_page():
              await run.io_bound(git_manager.push_changes_for_user, user)
              ui.notify('Published to team!', type='positive', position='bottom-right')
              await check_git_status()
+             if (user == 'Alex' or user == 'Sasha'):
+                ui.notify(f'Don\'t forget to copy/paste your files, {user}! ', type='warning', position='bottom-right')
         except Exception as e:
              ui.notify(f'Push failed: {e}', type='negative', position='bottom-right')
 
