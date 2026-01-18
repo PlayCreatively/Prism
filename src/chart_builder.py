@@ -18,7 +18,8 @@ def build_echart_options(
     active_user: str = None,
     positions: Dict[str, Any] = None,
     show_dead: bool = False,
-    visible_users: List[str] = None
+    visible_users: List[str] = None,
+    data_dir: str = "db/data"
 ) -> Dict[str, Any]:
     """
     Build ECharts options from internal graph representation.
@@ -29,13 +30,14 @@ def build_echart_options(
         positions: Dict mapping node_id -> [x, y] coordinates
         show_dead: Whether to show nodes with no interested users
         visible_users: List of users to consider visible (None = compute dynamically)
+        data_dir: Path to user data directory for color calculations
         
     Returns:
         ECharts options dict ready for ui.echart()
     """
     # Get visible users for color calculations
     if visible_users is None:
-        visible_users = get_visible_users()
+        visible_users = get_visible_users(data_dir)
     
     # If no visible users, return empty chart
     if not visible_users:

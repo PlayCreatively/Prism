@@ -61,12 +61,43 @@ The visual language extends beyond consensus color to reflect the Active User's 
 
 ## 3. System Architecture
 
+### 3.0 Multi-Project Support
+The system supports multiple isolated projects, each with its own graph, users, and git repository.
+
+**Project Structure:**
+```
+db/
+  {project-name}/
+    .git/           # Separate git repository per project
+    data/           # User state files
+      Alex.json
+      Sasha.json
+    nodes/          # Node files (ideas)
+      {uuid}.json
+  {another-project}/
+    .git/
+    data/
+    nodes/
+```
+
+**Project Features:**
+*   **Isolation:** Projects are completely independent - no shared data or users.
+*   **Switching:** Users can switch between projects via the Project dropdown in the header.
+*   **Creation:** New projects are created via a modal dialog requiring:
+    *   Project name (becomes folder name)
+    *   Initial username
+    *   Root node label and optional description
+*   **Git:** Each project initializes its own git repository for collaboration.
+
+**First-Time Setup:**
+If no projects exist, the application shows a welcome screen prompting the user to create their first project.
+
 ### 3.1 Data Persistence (Conflict-Free Multi-File Model)
 The system uses a normalized data architecture with **file-per-node storage** to eliminate merge conflicts during concurrent idea creation.
 
-**1. Node Files (`db/nodes/{uuid}.json`)**
+**1. Node Files (`db/{project}/nodes/{uuid}.json`)**
 Each idea is stored as an individual file, enabling conflict-free concurrent creation.
-*   **Scope:** One file per node, shared by all users.
+*   **Scope:** One file per node, shared by all users within the project.
 *   **Benefit:** Two users adding nodes simultaneously create two separate files — **zero merge conflicts**.
 *   **Schema:**
     ```json
@@ -78,9 +109,9 @@ Each idea is stored as an individual file, enabling conflict-free concurrent cre
     }
     ```
 
-**2. User State Files (`db/data/{user}.json`)**
+**2. User State Files (`db/{project}/data/{user}.json`)**
 Stores the specific relationship between a user and the nodes.
-*   **Scope:** One file per user (e.g., `Alex.json`, `Sasha.json`).
+*   **Scope:** One file per user within the project (e.g., `Alex.json`, `Sasha.json`).
 *   **Content:** "Votes", Metadata, and Interest flags.
 *   **Schema:**
     ```json
@@ -113,7 +144,7 @@ The tool handles Git operations semi-automatically to ensure users are always lo
 ### 3.3 Atomic Updates & Synchronization
 The multi-file architecture makes synchronization conflicts nearly impossible.
 
-*   **New Idea Creation:** Creates a new file in `db/nodes/`. Two users adding ideas simultaneously create separate files — **zero merge conflicts**.
+*   **New Idea Creation:** Creates a new file in `db/{project}/nodes/`. Two users adding ideas simultaneously create separate files — **zero merge conflicts**.
 *   **Structural Edits (Rename/Move):** Updates the individual node file. Conflicts only possible if two users edit the *same* node simultaneously (rare).
 *   **State Edits (Vote/Note):** Update `user.json`. Since users only write to their own file, **Merge Conflicts are impossible** for voting operations.
 *   **The "Mutation Ledger":** (Deprecated) The previous complex event-sourcing ledger has been removed in favor of this normalized architecture.
@@ -123,7 +154,7 @@ The system supports converting the complex UUID-bound graph into generic Project
 
 *   **Export to Template:** Converts the Graph into a **Label Tree** (Nested JSON structure), stripping all UUIDs and User Data.
     *   *Result:* A clean, shareable file representing just the ideas hierarchy.
-*   **Import from Template:** Ingests a Label Tree, generates **Fresh UUIDs**, and seeds new node files in `db/nodes/`.
+*   **Import from Template:** Ingests a Label Tree, generates **Fresh UUIDs**, and seeds new node files in `db/{project}/nodes/`.
     *   *Use Case:* "Cloning" a successful brainstorming structure to start a new project with a clean slate.
 
 ---

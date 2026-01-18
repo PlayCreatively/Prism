@@ -96,46 +96,64 @@ from src.utils import get_all_users, get_visible_users, get_hidden_users, toggle
 from src.ui_common import render_tri_state_buttons, render_editable_notes, render_other_users_notes
 from src.edit import EditController, EditOverlay, EditActions, setup_edit_handlers
 from src.chart_builder import build_echart_options, normalize_click_payload, resolve_node_id_from_payload, REQUESTED_EVENT_KEYS
+from src.project_manager import (
+    list_projects, 
+    project_exists, 
+    get_project_data_dir, 
+    get_project_git_path,
+    create_project,
+    get_project_users,
+    add_user_to_project
+)
 
 
-# Initialize core managers
-data_manager = DataManager(data_dir="db/data")
-# DrillEngine expects a list of users - discover dynamically from data files
-drill_engine = DrillEngine(users=get_all_users())
+# AI Agent is global (stateless)
 ai_agent = AIAgent()
-# git_manager is initialized per-page with error callback to enable UI notifications
 
-# Load data at startup, but only in the main process to avoid repeated
-# initialization when PyInstaller's bootloader / runtime hooks spawn
-# helper interpreter processes.
-if multiprocessing.current_process().name == 'MainProcess':
-    try:
-        print("Initializing DataManager...")
+# Note: DataManager, DrillEngine, and GitManager are now initialized per-project
+# inside the page function to support multi-project switching
+
+
+
+# Helper to show create project dialog
+def show_create_project_dialog(on_created=None, is_first_project=False):
+    """Show modal dialog to create a new project."""
+    with ui.dialog() as dialog, ui.card().classes('w-96'):
+        if is_first_project:
+            ui.label('Welcome to PRISM!').classes('text-xl font-bold text-primary')
+            ui.label('Create your first project to get started.').classes('text-gray-400 mb-4')
+        else:
+            ui.label('Create New Project').classes('text-lg font-bold')
         
-        if hasattr(data_manager, 'seed_demo_data'):
-            # Only seed if empty
-            g_check = data_manager.get_graph()
-            if not g_check.get('nodes'):
-                data_manager.seed_demo_data()
-
-        # Real DataManager doesn't need explicit load(), it reads from disk on get_graph
-        if hasattr(data_manager, 'load'):
-            data_manager.load()
-
-        # Cleanup orphan nodes (nodes with zero votes from any user)
-        if hasattr(data_manager, 'cleanup_orphan_nodes'):
-            orphan_count = data_manager.cleanup_orphan_nodes()
-            if orphan_count > 0:
-                print(f"Cleaned up {orphan_count} orphan nodes (no votes)")
-
-        print("Data init complete.")
-        g = data_manager.get_graph()
-        print(f"Graph stats: {len(g.get('nodes', []))} nodes, {len(g.get('edges', []))} edges")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error loading data: {e}")
-
+        project_name_input = ui.input('Project Name', placeholder='e.g., Research-Collab').classes('w-full')
+        username_input = ui.input('Your Username', placeholder='e.g., Alex').classes('w-full')
+        root_label_input = ui.input('Root Node Label', placeholder='e.g., Main Thesis').classes('w-full')
+        root_desc_input = ui.textarea('Root Node Description (optional)').classes('w-full').props('outlined rows=2')
+        
+        error_label = ui.label('').classes('text-red-500 text-sm')
+        
+        def do_create():
+            result = create_project(
+                project_name=project_name_input.value,
+                initial_username=username_input.value,
+                root_node_label=root_label_input.value,
+                root_node_description=root_desc_input.value or ""
+            )
+            if result['success']:
+                ui.notify(result['message'], type='positive')
+                dialog.close()
+                if on_created:
+                    on_created(project_name_input.value.strip())
+            else:
+                error_label.text = result['message']
+        
+        with ui.row().classes('w-full justify-end gap-2 mt-4'):
+            if not is_first_project:
+                ui.button('Cancel', on_click=dialog.close).props('flat')
+            ui.button('Create Project', on_click=do_create).props('color=primary')
+    
+    dialog.open()
+    return dialog
 
 
 # UI Construction - encapsulated in page function to avoid global state issues
@@ -144,12 +162,67 @@ def main_page():
     ui.dark_mode().enable()
     ui.query('body').style('margin: 0; padding: 0; overflow: hidden;')
     
+    # --- Project Selection ---
+    # Check for available projects
+    available_projects = list_projects()
+    
+    # Get stored project preference
+    stored_project = app.storage.user.get('active_project')
+    
+    # Validate stored project still exists
+    if stored_project and stored_project not in available_projects:
+        stored_project = None
+    
+    # If no valid project, use first available or None
+    current_project = stored_project or (available_projects[0] if available_projects else None)
+    
+    # Handle case where no projects exist - show welcome screen
+    if not current_project:
+        with ui.column().classes('fixed inset-0 flex items-center justify-center bg-slate-900'):
+            with ui.card().classes('w-96 p-8'):
+                ui.icon('hub', size='xl').classes('text-primary mb-4')
+                ui.label('Welcome to PRISM').classes('text-2xl font-bold text-white')
+                ui.label('Collaborative Consensus & Interest Mapping').classes('text-gray-400 mb-6')
+                ui.label('No projects found. Create your first project to get started.').classes('text-gray-300 mb-4')
+                
+                def handle_project_created(project_name):
+                    app.storage.user['active_project'] = project_name
+                    ui.navigate.to('/')  # Reload page
+                
+                ui.button('Create First Project', on_click=lambda: show_create_project_dialog(
+                    on_created=handle_project_created,
+                    is_first_project=True
+                )).props('color=primary size=lg')
+        return  # Don't render the rest of the app
+    
+    # --- Project-specific initialization ---
+    project_data_dir = get_project_data_dir(current_project)
+    project_git_path = get_project_git_path(current_project)
+    
+    # Initialize project-specific managers
+    data_manager = DataManager(data_dir=project_data_dir)
+    drill_engine = DrillEngine(users=get_all_users(project_data_dir))
+    
+    # Initialize data for the project
+    if multiprocessing.current_process().name == 'MainProcess':
+        try:
+            # Cleanup orphan nodes (nodes with zero votes from any user)
+            if hasattr(data_manager, 'cleanup_orphan_nodes'):
+                orphan_count = data_manager.cleanup_orphan_nodes()
+                if orphan_count > 0:
+                    print(f"[{current_project}] Cleaned up {orphan_count} orphan nodes")
+            
+            g = data_manager.get_graph()
+            print(f"[{current_project}] Graph: {len(g.get('nodes', []))} nodes, {len(g.get('edges', []))} edges")
+        except Exception as e:
+            print(f"[{current_project}] Error loading data: {e}")
+    
     # --- State & Closures ---
     
-    # Determine default active user dynamically
-    all_users_list = get_all_users()
+    # Determine default active user dynamically (for this project)
+    all_users_list = get_all_users(project_data_dir)
     stored_user = app.storage.user.get('active_user')
-    # Validate stored user still exists, otherwise pick first available
+    # Validate stored user still exists in this project, otherwise pick first available
     default_active_user = stored_user if stored_user in all_users_list else (all_users_list[0] if all_users_list else None)
     
     # We use a container for mutable state to be accessible in closures
@@ -159,6 +232,7 @@ def main_page():
         'details_container': None,
         'last_graph_hash': 0,
         'active_user': default_active_user,
+        'active_project': current_project,
         'show_dead': app.storage.user.get('show_dead', False),
         'last_selection_time': 0,
         'temperature': app.storage.user.get('temperature', 0.7),
@@ -174,9 +248,8 @@ def main_page():
     # --- Git State & Logic ---
     git_btn_ref = {}
     
-    # Create git_manager - errors are collected internally and raised as GitError exceptions
-    # which are caught by the async handlers that have proper UI context for notifications
-    git_manager = GitManager(repo_path="db") if GitManager else None
+    # Create git_manager for this project's repository
+    git_manager = GitManager(repo_path=project_git_path) if GitManager else None
 
     async def check_git_status():
         if not git_manager: return
@@ -274,6 +347,7 @@ def main_page():
             state.get('active_user'), 
             positions=None,
             show_dead=state.get('show_dead', False),
+            data_dir=project_data_dir,
         )
 
     def refresh_chart_ui():
@@ -401,7 +475,7 @@ def main_page():
 
     def set_active_user(user: str):
         # Default to first available user if something goes wrong
-        all_users = get_all_users()
+        all_users = get_all_users(project_data_dir)
         default_user = all_users[0] if all_users else None
         state['active_user'] = user or default_user
         app.storage.user['active_user'] = state['active_user']
@@ -613,12 +687,12 @@ def main_page():
                     rejected_set = set(generic_node.get('rejected_users', []))
                     
                     # Get all users and their dynamic colors
-                    all_users = get_all_users()
-                    visible_users = get_visible_users()
+                    all_users = get_all_users(project_data_dir)
+                    visible_users = get_visible_users(project_data_dir)
 
                     for user in all_users:
                         # Get user's dynamic color
-                        user_color = get_user_color(user, visible_users)
+                        user_color = get_user_color(user, visible_users, project_data_dir)
                         
                         if user in interested_set:
                             with ui.chip(icon='check', color='green').props('outline size=sm'):
@@ -699,7 +773,7 @@ def main_page():
             with ui.row().classes('w-full gap-2 justify-between'):
                 # Drill only visible if full consensus (all visible users interested)
                 current_interested = set(generic_node.get('interested_users', []))
-                visible_users_set = set(get_visible_users())
+                visible_users_set = set(get_visible_users(project_data_dir))
                 
                 # Consensus Drill Button - requires all visible users to be interested
                 has_consensus = visible_users_set and visible_users_set.issubset(current_interested)
@@ -826,8 +900,37 @@ def main_page():
             ui.label('PRISM').classes('text-lg font-bold leading-none text-white')
             ui.label('Consensus Graph').classes('text-xs text-gray-400 leading-none')
         
+        ui.separator().props('vertical')
+        
+        # --- Project Selector ---
+        def handle_project_change(project_name):
+            if project_name == '__create_new__':
+                # Show create project dialog
+                def on_project_created(new_project):
+                    app.storage.user['active_project'] = new_project
+                    ui.navigate.to('/')  # Reload page
+                show_create_project_dialog(on_created=on_project_created, is_first_project=False)
+            else:
+                app.storage.user['active_project'] = project_name
+                ui.navigate.to('/')  # Reload page to switch project
+        
+        # Build project options
+        project_options = {p: p for p in available_projects}
+        
+        project_select = ui.select(
+            project_options,
+            value=current_project,
+            label='Project'
+        ).props('dense outlined').classes('w-48')
+        project_select.on('update:model-value', lambda e: handle_project_change(project_select.value))
+        
+        ui.button(icon='add', on_click=lambda: handle_project_change('__create_new__')).props('flat dense round color=primary').tooltip('Create New Project')
+        
+        ui.separator().props('vertical')
+        
+        # --- User Selector ---
         # "Acting as User" dropdown - dynamically populated
-        all_users = get_all_users()
+        all_users = get_all_users(project_data_dir)
         default_user = state['active_user'] if state['active_user'] in all_users else (all_users[0] if all_users else None)
         if default_user and default_user != state['active_user']:
             state['active_user'] = default_user
@@ -843,13 +946,13 @@ def main_page():
         # User Visibility Filter dropdown
         def build_user_filter_options():
             """Build options for user visibility filter with colored labels."""
-            all_u = get_all_users()
-            visible_u = get_visible_users()
+            all_u = get_all_users(project_data_dir)
+            visible_u = get_visible_users(project_data_dir)
             hidden_u = get_hidden_users()
             options = []
             for u in all_u:
                 is_hidden = u in hidden_u
-                color = '#808080' if is_hidden else get_user_color(u, visible_u)
+                color = '#808080' if is_hidden else get_user_color(u, visible_u, project_data_dir)
                 options.append({'label': u, 'value': u, 'color': color, 'hidden': is_hidden})
             return options
         
@@ -859,8 +962,8 @@ def main_page():
             
             def rebuild_filter_ui():
                 filter_container.clear()
-                all_u = get_all_users()
-                visible_u = get_visible_users()
+                all_u = get_all_users(project_data_dir)
+                visible_u = get_visible_users(project_data_dir)
                 hidden_u = get_hidden_users()
                 
                 if not all_u:
@@ -871,7 +974,7 @@ def main_page():
                 with filter_container:
                     for u in all_u:
                         is_hidden = u in hidden_u
-                        color = '#808080' if is_hidden else get_user_color(u, visible_u)
+                        color = '#808080' if is_hidden else get_user_color(u, visible_u, project_data_dir)
                         
                         def make_toggle_handler(user_id):
                             def handler():
