@@ -236,7 +236,6 @@ def main_page():
         'show_dead': app.storage.user.get('show_dead', False),
         'last_selection_time': 0,
         'temperature': app.storage.user.get('temperature', 0.7),
-        'test_mode': app.storage.user.get('test_mode', False),
         'is_ctrl_pressed': False,
         'mouse_position': (0, 0),
         'dragging_node_id': None,
@@ -775,10 +774,8 @@ def main_page():
                 current_interested = set(generic_node.get('interested_users', []))
                 visible_users_set = set(get_visible_users(project_data_dir))
                 
-                # Consensus Drill Button - requires all visible users to be interested
-                has_consensus = visible_users_set and visible_users_set.issubset(current_interested)
-                if state.get('test_mode') or has_consensus:
-                    ui.button('Drill', on_click=lambda: do_drill_action(node_id)).props('icon=hub')
+                # Drill Button
+                ui.button('Drill', on_click=lambda: do_drill_action(node_id)).props('icon=hub')
                 
                 # Voting Controls (Tri-state)
                 # Determine current state for visual highlighting
@@ -1043,20 +1040,12 @@ def main_page():
                 state['show_dead'] = e.value
                 app.storage.user['show_dead'] = e.value
                 refresh_chart_ui()
-
-            def toggle_test(e):
-                state['test_mode'] = e.value
-                app.storage.user['test_mode'] = e.value
-                # Refresh details if open, to show/hide Drill button
-                if state['selected_node_id']:
-                    show_node_details(state['selected_node_id'])
             
             def update_temp(e):
                 state['temperature'] = e.value
                 app.storage.user['temperature'] = e.value
 
             ui.switch('Dead', value=state['show_dead'], on_change=toggle_dead).props('dense color=grey').tooltip('Show/Hide Dead Nodes')
-            ui.switch('Test', value=state['test_mode'], on_change=toggle_test).props('dense color=orange').tooltip('Enable Test Mode (Always Drill)')
             
             with ui.row().classes('items-center gap-1'):
                 ui.label('Temp:').classes('text-xs text-gray-400')
