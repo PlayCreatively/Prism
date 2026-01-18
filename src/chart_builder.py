@@ -18,7 +18,6 @@ def build_echart_options(
     active_user: str = None,
     positions: Dict[str, Any] = None,
     show_dead: bool = False,
-    all_users_view: bool = False,
     visible_users: List[str] = None
 ) -> Dict[str, Any]:
     """
@@ -29,7 +28,6 @@ def build_echart_options(
         active_user: Currently active user for filtering/styling
         positions: Dict mapping node_id -> [x, y] coordinates
         show_dead: Whether to show nodes with no interested users
-        all_users_view: Whether in "all users" view mode (no filtering)
         visible_users: List of users to consider visible (None = compute dynamically)
         
     Returns:
@@ -99,10 +97,9 @@ def build_echart_options(
         if is_dead and not show_dead:
             continue
 
-        if not all_users_view:
-            # Hide nodes rejected by any user (unless showing dead/hidden)
-            if rejected and not active_user in users and not show_dead:
-                continue
+        # Hide nodes rejected by any user (unless showing dead/hidden)
+        if rejected and not active_user in users and not show_dead:
+            continue
 
         color = color_from_users(users, visible_users=visible_users)
         # Size depends on hierarchy depth (higher up = larger)
@@ -119,10 +116,9 @@ def build_echart_options(
         background_color = '#312e2a'
         has_rejections = False
         
-        if not all_users_view:
-            # Apply Active User Context Rules
-            has_rejections = len(rejected) > 0
-            is_interested = active_user in users
+        # Apply Active User Context Rules
+        has_rejections = len(rejected) > 0
+        is_interested = active_user in users
             
         if has_rejections:
             # Deprioritized: Anyone rejected it

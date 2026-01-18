@@ -56,7 +56,6 @@ The visual language extends beyond consensus color to reflect the Active User's 
 
 **Toggles**
 *  **Show Dead Nodes**: Option to reveal universally rejected ideas for auditing purposes.
-*  **All Users View**: Option to disable Active User context, rendering all nodes (except Dead Nodes) in full color and opacity for a "god's eye view" of the entire consensus landscape.
 
 ---
 
@@ -245,7 +244,6 @@ The application abandons separate tabs in favor of a modern, map-centric interfa
     *   User Selector.
     *   **Review Pending** button (with counter badge).
     *   **Show/Hide Dead Nodes** toggle.
-    *   **All Users View** toggle (God Mode).
 *   **Visuals:** Nodes rendered with the RGB consensus color. "Pending" nodes use moving dashed borders.
 
 ### The Context Window (Floating Overlay)

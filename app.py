@@ -218,7 +218,6 @@ def main_page():
         'last_graph_hash': 0,
         'active_user': default_active_user,
         'show_dead': app.storage.user.get('show_dead', False),
-        'all_users_view': app.storage.user.get('all_users_view', False),
         'last_selection_time': 0,
         'temperature': app.storage.user.get('temperature', 0.7),
         'test_mode': app.storage.user.get('test_mode', False),
@@ -312,7 +311,6 @@ def main_page():
             state.get('active_user'), 
             positions=None,
             show_dead=state.get('show_dead', False),
-            all_users_view=state.get('all_users_view', False)
         )
 
     def refresh_chart_ui():
@@ -956,11 +954,6 @@ def main_page():
                 state['show_dead'] = e.value
                 app.storage.user['show_dead'] = e.value
                 refresh_chart_ui()
-            
-            def toggle_all(e):
-                state['all_users_view'] = e.value
-                app.storage.user['all_users_view'] = e.value
-                refresh_chart_ui()
 
             def toggle_test(e):
                 state['test_mode'] = e.value
@@ -974,7 +967,6 @@ def main_page():
                 app.storage.user['temperature'] = e.value
 
             ui.switch('Dead', value=state['show_dead'], on_change=toggle_dead).props('dense color=grey').tooltip('Show/Hide Dead Nodes')
-            ui.switch('God', value=state['all_users_view'], on_change=toggle_all).props('dense color=blue').tooltip('All Users View (God Mode)')
             ui.switch('Test', value=state['test_mode'], on_change=toggle_test).props('dense color=orange').tooltip('Enable Test Mode (Always Drill)')
             
             with ui.row().classes('items-center gap-1'):
