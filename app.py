@@ -47,20 +47,6 @@ ui.add_head_html('''
             background: #334155; /* slate-700 */
         }
     </style>
-    <script>
-        // Prevent Ctrl key from triggering ECharts zoom/pan
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Control' || e.ctrlKey) {
-                e.preventDefault();
-            }
-        }, { passive: false });
-        
-        document.addEventListener('keyup', function(e) {
-            if (e.key === 'Control') {
-                e.preventDefault();
-            }
-        }, { passive: false });
-    </script>
 ''', shared=True)
 
 from src.data_manager import DataManager
@@ -414,8 +400,8 @@ def main_page():
         if not health['ok']:
             # Silent return on repeated failures to avoid spam, 
             # or just log it to console
-            for issue in health['issues']:
-                ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
+            # for issue in health['issues']:
+            #     ui.notify(f"Git Config: {issue}", type='warning', timeout=0, close_button=True)
             return
 
         try:
@@ -1192,8 +1178,8 @@ if __name__ in {"__main__", "__mp_main__"}:
         port=8081,
         reload=not getattr(sys, 'frozen', False),
         storage_secret='prism_secret_key_123',
-        native=True,  # Run as native desktop app
-        window_size=(1280, 720),
-        fullscreen=True,
+        # native=True,  # Run as native desktop app
+        # window_size=(1280, 720),
+        # fullscreen=True,
     )
 
