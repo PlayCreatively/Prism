@@ -37,11 +37,16 @@ def separate_approved_rejected(
         
         # Get the active user's stance on this child
         u_node = data_manager.get_user_node(active_user, cid)
-        if u_node and u_node.get('interested') is False:
-            rejected.append(cnode.get('label', 'Untitled'))
-        else:
-            # If interested is True or missing (not yet voted), treat as approved
-            approved.append(cnode.get('label', 'Untitled'))
+        if u_node:
+            interested = u_node.get('interested')
+            if interested is True:
+                approved.append(cnode.get('label', 'Untitled'))
+                approved.append(cnode.get('description'))
+                
+            elif interested is False:
+                rejected.append(cnode.get('label', 'Untitled'))
+                
+            # If `interested` is missing/None, do not classify the child
     
     return approved, rejected
 

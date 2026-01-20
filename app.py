@@ -652,6 +652,8 @@ def main_page():
         """
         Sets the vote status for a user.
         status: 'accepted' | 'rejected' | 'maybe'
+        
+        'maybe' sets interested=None (pending) but preserves any existing metadata.
         """
         if user is None:
             user = state.get('active_user')
@@ -660,7 +662,8 @@ def main_page():
             return
         try:
             if status == 'maybe':
-                data_manager.remove_user_node(user, node_id)
+                # Set interested to None (pending) but preserve metadata
+                data_manager.update_user_node(user, node_id, interested=None)
                 ui.notify(f"{user} reset vote (Maybe)", type='info')
             else:
                 interested = (status == 'accepted')
@@ -727,6 +730,11 @@ def main_page():
         Persist changes. 
         - Label/Parent/Description changes are shared (update_shared_node).
         - Metadata/Interested are per-user (update_user_node).
+        
+        User data is only saved when:
+        - User has an explicit vote (interested key is present), OR
+        - User has written non-empty metadata, OR
+        - User already has an existing entry for this node
         """
         active_user = state.get('active_user')
         if not active_user:
@@ -749,8 +757,23 @@ def main_page():
         try:
             if shared_upd:
                 data_manager.update_shared_node(node_id, **shared_upd)
+            
             if user_upd:
-                data_manager.update_user_node(active_user, node_id, **user_upd)
+                # Check if we should update user data:
+                # - If there's an explicit vote (interested key), always update
+                # - If metadata is non-empty, update
+                # - If user already has an entry for this node, update (to potentially clear values)
+                # 
+                # update_user_node handles cleanup:
+                # - Empty metadata is removed (absence = blank)
+                # - interested=None removes the key (absence = pending)
+                # - If both are absent, the entire node entry is removed
+                has_explicit_vote = 'interested' in user_upd
+                has_metadata = user_upd.get('metadata', '').strip() != ''
+                user_already_has_entry = data_manager.get_user_node(active_user, node_id) is not None
+                
+                if has_explicit_vote or has_metadata or user_already_has_entry:
+                    data_manager.update_user_node(active_user, node_id, **user_upd)
             
             # Trigger git status check
             ui.timer(0.5, check_git_status, once=True)
@@ -780,20 +803,21 @@ def main_page():
             return
             
         # Use user-specific values if available
-        # If user_node is MISSING, they are effectively 'pending' (haven't interacted).
-        # If user_node exists, check 'interested' boolean.
+        # interested can be: True (accepted), False (rejected), None (pending with notes)
+        # If user_node is MISSING, they are effectively 'pending' (haven't interacted at all).
         
-        is_interested = user_node.get('interested', True) if user_node else True 
+        interested_value = user_node.get('interested') if user_node else None
         
-        if not user_node:
-             status_label = "pending"
-             status_color = "grey"
-        elif is_interested:
+        if interested_value is True:
              status_label = "accepted"
              status_color = "green"
-        else:
+        elif interested_value is False:
              status_label = "rejected"
              status_color = "red"
+        else:
+             # None or missing = pending (whether they have notes or not)
+             status_label = "pending"
+             status_color = "grey"
 
         display_metadata = user_node.get('metadata', '') if user_node else ''
         display_label = generic_node.get('label', '') # Label is shared
@@ -917,7 +941,8 @@ def main_page():
             render_other_users_notes(
                 node_id=node_id,
                 active_user=active_user,
-                data_manager=data_manager
+                data_manager=data_manager,
+                users=all_users_list
             )
             
             save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')
@@ -953,12 +978,14 @@ def main_page():
             # Voting row
             with ui.row().classes('w-full gap-2 justify-end mt-2'):
                 # Determine current vote state for visual highlighting
-                if not user_node:
-                    curr_vote = 'maybe'
-                elif user_node.get('interested', True):
+                # interested can be True, False, or None
+                interested_val = user_node.get('interested') if user_node else None
+                if interested_val is True:
                     curr_vote = 'accepted'
-                else: 
+                elif interested_val is False: 
                     curr_vote = 'rejected'
+                else:
+                    curr_vote = 'maybe'
                 
                 render_tri_state_buttons(
                     curr_vote,

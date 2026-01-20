@@ -203,19 +203,19 @@ class DataManager:
             for u in users:
                 u_node = user_states[u].get(nid)
                 if u_node:
-                    # Explicit state
-                    if u_node.get("interested", True):
+                    # Check explicit vote state
+                    # interested: True = accepted, False = rejected, absent = pending/unsure
+                    if u_node.get("interested") is True:
                         interested.append(u)
-                    else:
+                    elif u_node.get("interested") is False:
                         rejected.append(u)
+                    # If 'interested' key is absent, user is pending (may have notes but no vote)
                     
-                    # Capture metadata if strictly present
+                    # Capture metadata if present
                     if not combined_metadata and u_node.get("metadata"):
                         combined_metadata = u_node.get("metadata")
                 else:
-                    # Implied state? 
-                    # If user has no record, they are NOT in interested list yet (Pending).
-                    # They are NOT in rejected list.
+                    # No record for this user = pending (haven't interacted at all)
                     pass
             
             node_out['interested_users'] = interested
@@ -293,21 +293,42 @@ class DataManager:
     def update_user_node(self, user_id: str, node_id: str, **kwargs) -> None:
         """
         Updates a specific user's state for a node (e.g. status, metadata).
+        
+        Data model:
+        - 'interested': True = accepted, False = rejected, absent = pending/unsure
+        - 'metadata': string value if notes exist, absent = no notes
+        
+        When both fields are absent, the entire node entry is removed from the user file.
         """
         u_data = self.load_user(user_id)
         if "nodes" not in u_data: u_data["nodes"] = {}
         
-        # Get existing or create default
-        # If default is created, it means user is interacting with a pending node
-        curr = u_data["nodes"].get(node_id, {"interested": True, "metadata": ""})
+        # Get existing entry or start fresh
+        curr = u_data["nodes"].get(node_id, {})
         
         # Apply updates
         if "interested" in kwargs:
-            curr["interested"] = kwargs["interested"]
+            interested_val = kwargs["interested"]
+            if interested_val is None:
+                # Remove the key (absence = pending/unsure)
+                curr.pop("interested", None)
+            else:
+                curr["interested"] = interested_val
+                
         if "metadata" in kwargs:
-            curr["metadata"] = kwargs["metadata"]
+            metadata_val = kwargs["metadata"]
+            if not metadata_val or (isinstance(metadata_val, str) and metadata_val.strip() == ""):
+                # Remove empty metadata (absence = blank)
+                curr.pop("metadata", None)
+            else:
+                curr["metadata"] = metadata_val
+        
+        # If node entry is now empty (no interested, no metadata), remove it entirely
+        if not curr:
+            u_data["nodes"].pop(node_id, None)
+        else:
+            u_data["nodes"][node_id] = curr
             
-        u_data["nodes"][node_id] = curr
         self.save_user(u_data)
 
     def update_shared_node(self, node_id: str, **kwargs) -> None:

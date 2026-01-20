@@ -86,15 +86,12 @@ def render_other_users_notes(
     node_id: str,
     active_user: str,
     data_manager,
-    users: list = None
+    users: list
 ):
     """
     Renders notes from other users (not the active user) for a given node.
-    Colors the header/border green for accepted users, red for rejected users.
+    Colors the header/border green for accepted users, red for rejected users and unsure for unvoted users.
     """
-    if users is None:
-        users = data_manager.list_users() if hasattr(data_manager, 'list_users') else []
-    
     other_users = [u for u in users if u != active_user]
     
     has_any_notes = False
@@ -103,6 +100,7 @@ def render_other_users_notes(
         user_node = data_manager.get_user_node(user, node_id)
         if not user_node:
             continue
+        print(f"[UI] Rendering notes for user '{user}' keys '{user_node.get('interested')}'")
         
         metadata = user_node.get('metadata', '')
         if not metadata or not metadata.strip():
@@ -117,15 +115,20 @@ def render_other_users_notes(
             border_color = 'border-green-500'
             text_color = 'text-green-400'
             bg_color = 'bg-green-900/20'
-        else:
+        elif is_interested is False:
             # Rejected - red
             border_color = 'border-red-500'
             text_color = 'text-red-400'
             bg_color = 'bg-red-900/20'
+        else:
+            # Unsure - gray
+            border_color = 'border-gray-500'
+            text_color = 'text-gray-400'
+            bg_color = 'bg-gray-900/20'
         
         # Render user's notes with colored styling
         # Determine icon based on vote status
-        icon = 'check' if is_interested else 'close'
+        icon = 'check' if is_interested else 'close' if is_interested is False else 'help_outline'
         
         with ui.element('div').classes(f'w-full rounded border-l-4 {border_color} {bg_color} p-2 mt-2'):
             with ui.row().classes('items-center gap-2'):
