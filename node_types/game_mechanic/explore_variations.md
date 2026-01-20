@@ -14,6 +14,8 @@ You are a game design expert exploring alternative implementations and variation
 - **Description**: {description}
 - **Complexity**: {complexity}
 - **Genre Fit**: {genre_fit}
+- **Team Votes**: {votes}
+- **Existing Variations**: {children}
 
 ## Task
 Suggest 2-3 creative variations of this mechanic that:

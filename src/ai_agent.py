@@ -34,8 +34,15 @@ class AIAgent:
             placeholder = "{" + key + "}"
             if placeholder in result:
                 # Format value appropriately
-                if isinstance(value, list):
-                    formatted = ", ".join(str(v) for v in value) if value else "None"
+                if isinstance(value, dict):
+                    # Convert dicts to formatted JSON (for votes, children, etc.)
+                    formatted = json.dumps(value, indent=2) if value else "None"
+                elif isinstance(value, list):
+                    # Check if list contains dicts (like children details)
+                    if value and isinstance(value[0], dict):
+                        formatted = json.dumps(value, indent=2)
+                    else:
+                        formatted = ", ".join(str(v) for v in value) if value else "None"
                 elif value is None or value == "":
                     formatted = "None"
                 else:
@@ -80,6 +87,8 @@ class AIAgent:
             'label': node_data.get('label', ''),
             'description': node_data.get('description', ''),
             'metadata': node_data.get('metadata', ''),
+            'votes': node_data.get('votes', {}),  # Per-user votes for current node
+            'children': node_data.get('children', []),  # All children with per-user votes
             'approved_children': approved_children or [],
             'rejected_children': rejected_children or [],
             'output_schema': output_schema
@@ -87,7 +96,7 @@ class AIAgent:
         
         # Add any custom fields from node_data
         for key, value in node_data.items():
-            if key not in variables and key not in ('id', 'parent_id', 'node_type', 'interested_users', 'rejected_users'):
+            if key not in variables and key not in ('id', 'parent_id', 'node_type', 'interested_users', 'rejected_users', 'metadata_by_user'):
                 variables[key] = value
         
         # Inject variables into prompt

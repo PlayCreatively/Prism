@@ -14,6 +14,7 @@ You are a design researcher helping translate research insights into practical g
 - **Description**: {description}
 - **Methodology**: {methodology}
 - **Research Question**: {research_question}
+- **Team Votes**: {votes}
 
 ## Task
 Suggest 2-3 game mechanics that:

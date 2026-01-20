@@ -190,8 +190,10 @@ You are an expert helping explore sub-concepts...
 - **Ancestry**: {label}
 - **Description**: {description}
 - **Notes**: {metadata}
+- **Team Votes**: {votes}
 - **Existing Children (Approved)**: {approved_children}
 - **Existing Children (Rejected)**: {rejected_children}
+- **Children Details**: {children}
 
 ## Output Format
 Return a JSON object matching this schema:
@@ -217,10 +219,64 @@ The system injects these variables before sending to AI:
 | `{label}` | Node's label (or ancestry chain) |
 | `{description}` | Node's description |
 | `{metadata}` | Active user's notes |
-| `{approved_children}` | Existing children user has accepted |
-| `{rejected_children}` | Existing children user has rejected |
+| `{votes}` | All users' votes and notes on this node (JSON) |
+| `{approved_children}` | Existing children user has accepted (labels only) |
+| `{rejected_children}` | Existing children user has rejected (labels only) |
+| `{children}` | All children with full details and per-user votes (JSON) |
 | `{custom_field_key}` | Value of any custom field by its key |
 | `{output_schema}` | **Auto-generated JSON schema** for the target node type |
+
+### Detailed Context Variables
+
+The `{votes}` and `{children}` variables provide comprehensive context for AI decision-making.
+
+#### `{votes}` - Current Node's Voting Details
+
+```json
+{
+  "Alex": {"interested": true, "metadata": "I think this could work well with our theme..."},
+  "Sasha": {"interested": true, "metadata": ""},
+  "Alison": {"interested": null, "metadata": "Need to discuss with team first"}
+}
+```
+
+- `interested: true` = user approved
+- `interested: false` = user rejected  
+- `interested: null` = user hasn't voted
+
+#### `{children}` - All Children with Full Context
+
+```json
+[
+  {
+    "label": "Resource Scarcity",
+    "description": "Players must manage limited resources...",
+    "node_type": "game_mechanic",
+    "complexity": "Medium",
+    "votes": {
+      "Alex": {"interested": true, "metadata": "Love this direction"},
+      "Sasha": {"interested": false, "metadata": "Too similar to existing mechanics"},
+      "Alison": {"interested": null, "metadata": ""}
+    }
+  },
+  {
+    "label": "Trading System",
+    "description": "Players can exchange resources...",
+    "node_type": "game_mechanic", 
+    "complexity": "High",
+    "votes": {
+      "Alex": {"interested": true, "metadata": ""},
+      "Sasha": {"interested": true, "metadata": "Could add interesting player dynamics"},
+      "Alison": {"interested": true, "metadata": "Yes! This fits our vision"}
+    }
+  }
+]
+```
+
+This includes:
+- All node fields (label, description, custom fields)
+- Every user's vote (`interested`) and notes (`metadata`)
+- Allows AI to understand team consensus and disagreements
 
 ### Auto-Generated Output Schema
 

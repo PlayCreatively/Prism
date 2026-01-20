@@ -50,6 +50,91 @@ def separate_approved_rejected(
     
     return approved, rejected
 
+
+def build_node_votes(node_id: str, data_manager: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    Build detailed voting information for a node across all users.
+    Only includes users who have voted or left notes (omits empty entries).
+    
+    Returns dict like:
+    {
+        "Alex": {"interested": true, "metadata": "I think this could work..."},
+        "Sasha": {"interested": false},
+        "Alison": {"metadata": "Need to discuss"}
+    }
+    """
+    votes = {}
+    all_users = data_manager.list_users()
+    
+    for user in all_users:
+        u_node = data_manager.get_user_node(user, node_id)
+        if u_node:
+            interested = u_node.get("interested")
+            metadata = u_node.get("metadata", "")
+            
+            # Only include if user has voted or left notes
+            if interested is not None or metadata:
+                entry = {}
+                if interested is not None:
+                    entry["interested"] = interested
+                if metadata:
+                    entry["metadata"] = metadata
+                votes[user] = entry
+    
+    return votes
+
+
+def build_children_details(
+    children_ids: List[str],
+    graph: Dict[str, Any],
+    data_manager: Any
+) -> List[Dict[str, Any]]:
+    """
+    Build detailed information for all children including per-user votes.
+    
+    Returns list like:
+    [
+        {
+            "label": "Resource Scarcity",
+            "description": "Players must manage...",
+            "node_type": "game_mechanic",
+            "complexity": "Medium",
+            "votes": {
+                "Alex": {"interested": true, "metadata": "Love this"},
+                "Sasha": {"interested": false, "metadata": "Too similar"}
+            }
+        },
+        ...
+    ]
+    """
+    children = []
+    
+    for cid in children_ids:
+        cnode = next((n for n in graph.get('nodes', []) if n['id'] == cid), None)
+        if not cnode:
+            continue
+        
+        # Build child data with all fields
+        child_data = {
+            "label": cnode.get("label", "Untitled"),
+            "description": cnode.get("description", ""),
+            "node_type": cnode.get("node_type", "default"),
+        }
+        
+        # Add any custom fields (skip system fields)
+        skip_fields = {'id', 'parent_id', 'label', 'description', 'node_type', 
+                       'interested_users', 'rejected_users', 'metadata', 'metadata_by_user'}
+        for key, value in cnode.items():
+            if key not in skip_fields:
+                child_data[key] = value
+        
+        # Add per-user votes for this child
+        child_data["votes"] = build_node_votes(cid, data_manager)
+        
+        children.append(child_data)
+    
+    return children
+
 async def start_drill_process(
     node_id: str,
     data_manager: Any,
@@ -124,7 +209,13 @@ async def start_drill_process(
         children_ids = [e['target'] for e in graph.get('edges', []) if e['source'] == node_id]
         approved_children, rejected_children = separate_approved_rejected(children_ids, graph, data_manager, active_user)
 
-        # Gather metadata from ALL users to give AI full context
+        # Build detailed votes for current node (all users' votes and notes)
+        node_votes = build_node_votes(node_id, data_manager)
+        
+        # Build detailed children info (all children with per-user votes)
+        children_details = build_children_details(children_ids, graph, data_manager)
+
+        # Gather metadata from ALL users to give AI full context (legacy combined format)
         combined_notes = []
         all_users = data_manager.list_users()
         for user in all_users:
@@ -151,11 +242,17 @@ async def start_drill_process(
         print(f"[Drill] Description: {node_description}")
         print(f"[Drill] Approved: {approved_children}")
         print(f"[Drill] Rejected: {rejected_children}")
+        print(f"[Drill] Node votes: {len(node_votes)} users")
+        print(f"[Drill] Children details: {len(children_details)} children")
+        print(f"[Drill] Node votes: {node_votes} users")
+        print(f"[Drill] Children details: {children_details} children")
         
         # Build full node data for the AI
         node_data = dict(node)
         node_data['label'] = full_ancestry  # Use ancestry chain as label
         node_data['metadata'] = full_context_str
+        node_data['votes'] = node_votes  # Detailed per-user votes for this node
+        node_data['children'] = children_details  # All children with per-user votes
         
         candidates = await run.io_bound(
             ai_agent.generate_candidates_for_prompt,

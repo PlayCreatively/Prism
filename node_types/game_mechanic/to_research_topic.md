@@ -14,6 +14,7 @@ You are an academic advisor helping game design students identify research oppor
 - **Description**: {description}
 - **Complexity**: {complexity}
 - **Genre Fit**: {genre_fit}
+- **Team Votes**: {votes}
 
 ## Task
 Suggest 2-3 academic research angles that:

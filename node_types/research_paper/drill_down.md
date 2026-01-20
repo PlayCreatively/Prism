@@ -16,10 +16,12 @@ You are an academic advisor helping to decompose a research topic into manageabl
 - **Research Question**: {research_question}
 - **Keywords**: {keywords}
 - **Notes**: {metadata}
+- **Team Votes**: {votes}
 
 ## Existing Sub-Topics
 - **Approved**: {approved_children}
 - **Rejected**: {rejected_children}
+- **All Children with Votes**: {children}
 
 ## Task
 Suggest 2-3 sub-topics or component questions that:

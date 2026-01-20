@@ -16,10 +16,12 @@ You are a game design expert helping to break down a game mechanic into its cons
 - **Genre Fit**: {genre_fit}
 - **Implementation Notes**: {implementation_notes}
 - **Team Notes**: {metadata}
+- **Team Votes**: {votes}
 
 ## Existing Sub-Mechanics
 - **Approved**: {approved_children}
 - **Rejected**: {rejected_children}
+- **All Children with Votes**: {children}
 
 ## Task
 Generate 2-3 sub-mechanics, variations, or implementation approaches that:

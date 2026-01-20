@@ -15,6 +15,7 @@ You are a research librarian helping identify relevant academic literature and t
 - **Methodology**: {methodology}
 - **Research Question**: {research_question}
 - **Keywords**: {keywords}
+- **Team Votes**: {votes}
 
 ## Task
 Suggest 2-3 related work areas to explore that:
