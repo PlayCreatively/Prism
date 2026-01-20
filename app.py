@@ -639,6 +639,13 @@ def main_page():
             if recent_md and recent_md > 0.1:
                 print(f"Ignoring background click after recent mouse-down ({recent_md:.3f}s). Keeping selection.")
                 return
+                
+            # Check if this is a "ghost" click immediately after a valid selection
+            # This happens because 'click' events often fire after 'componentClick' events
+            gap = time.time() - state.get('last_selection_time', 0)
+            if gap < 0.05:
+                print("Ignoring background click immediately after selection (ghost click)")
+                return
 
             print("No node_id found in click (Background or Edge). Clearing selection.")
             reset_selection()
