@@ -1,0 +1,41 @@
+{
+	"fields": [
+		{
+			"key": "complexity",
+			"type": "tag",
+			"label": "Complexity",
+			"selection": [
+				"Low",
+				"Medium",
+				"High"
+			],
+			"multiple": false,
+			"required": true
+		},
+		{
+			"key": "genre_fit",
+			"type": "tag",
+			"label": "Genre Fit",
+			"selection": [
+				"Action",
+				"Puzzle",
+				"Strategy",
+				"RPG",
+				"Simulation",
+				"Narrative"
+			],
+			"multiple": true
+		},
+		{
+			"key": "implementation_notes",
+			"type": "text",
+			"label": "Implementation Notes",
+			"multiline": true
+		},
+		{
+			"key": "assigned_to",
+			"type": "user",
+			"label": "Assigned To"
+		}
+	]
+}

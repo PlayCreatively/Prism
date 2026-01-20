@@ -22,12 +22,11 @@ load_dotenv()
 import multiprocessing
 
 # Path and config initialization
-from src.paths import ensure_db_dir, ensure_prompts_dir, get_prompts_dir
+from src.paths import ensure_db_dir
 from src.config import get_api_key, set_api_key, validate_api_key, ensure_api_key_in_env
 
 # Ensure required directories exist on startup
 ensure_db_dir()
-ensure_prompts_dir()
 
 # Global Styles
 ui.add_head_html('''
@@ -60,6 +59,9 @@ ui.add_head_html('''
 
 from src.data_manager import DataManager
 from src.drill_engine import DrillEngine
+from src.node_type_manager import get_node_type_manager
+from src.custom_fields import render_custom_fields
+from src.components import render_markdown_textarea
 
 try:
     from src.ai_agent import AIAgent
@@ -684,7 +686,7 @@ def main_page():
         # For now, implemented as compatibility wrapper if clicked blindly
         pass
         
-    async def do_drill_action(node_id):
+    async def do_drill_action(node_id, prompt_filename: str = 'drill_down.md'):
         active_user = state.get('active_user')
         if not active_user:
             ui.notify('No active user selected', type='warning')
@@ -695,7 +697,8 @@ def main_page():
             ai_agent=ai_agent,
             active_user=active_user,
             on_complete=refresh_chart_ui,
-            temperature=state.get('temperature', 0.7)
+            temperature=state.get('temperature', 0.7),
+            prompt_filename=prompt_filename
         )
             
     def open_add_dialog():
@@ -739,6 +742,9 @@ def main_page():
                 shared_upd[k] = v
             elif k in ['metadata', 'interested']:
                 user_upd[k] = v
+            else:
+                # Custom fields go to shared node data
+                shared_upd[k] = v
         
         try:
             if shared_upd:
@@ -826,9 +832,19 @@ def main_page():
                             with ui.chip(icon='help_outline', color='grey').props('outline size=sm').classes('opacity-40'):
                                 ui.label(user).classes('text-gray-400')  # Gray for pending/unknown state
 
-            # Description (shared across all users)
-            description_input = ui.textarea('Description', value=generic_node.get('description', '')).classes('w-full')
-            description_input.props('outlined rows=3')
+            # Description (shared across all users) - rendered after schedule_save is defined
+            description_container = ui.column().classes('w-full')
+            description_value = {'text': generic_node.get('description', '')}
+
+            # --- Prepare custom fields data (render after schedule_save is defined) ---
+            node_type = generic_node.get('node_type', 'default')
+            node_type_manager = get_node_type_manager()
+            type_def = node_type_manager.load_type(node_type)
+            custom_fields = type_def.get('fields', []) if type_def else []
+            all_users_list = get_all_users(project_data_dir)
+            
+            # Placeholder for custom field values - will be populated after schedule_save is defined
+            custom_field_values = {}
 
             # Local state for metadata since we use an external component
             current_metadata = display_metadata
@@ -843,9 +859,10 @@ def main_page():
                 if not final_label:
                     final_label = display_label
                 
-                new_description = description_input.value or ''
+                new_description = description_value['text']
                 
-                persist_node_changes(node_id, label=final_label, description=new_description, metadata=current_metadata)
+                # Include custom field values in the save
+                persist_node_changes(node_id, label=final_label, description=new_description, metadata=current_metadata, **custom_field_values)
                 refresh_chart_ui()
                 
                 # Update status
@@ -860,6 +877,29 @@ def main_page():
                     _save_timer.cancel()
                 # Schedule save
                 _save_timer = ui.timer(1.0, execute_autoresave, once=True)
+
+            # --- Description Field (rendered after schedule_save is available) ---
+            with description_container:
+                def on_description_change(new_val):
+                    description_value['text'] = new_val
+                    schedule_save()
+                
+                render_markdown_textarea(
+                    value=description_value['text'],
+                    label='DESCRIPTION',
+                    placeholder='Click to add description...',
+                    on_change=on_description_change
+                )
+
+            # --- Custom Fields Section (rendered after schedule_save is available) ---
+            if custom_fields:
+                render_custom_fields(
+                    fields=custom_fields,
+                    node_data=generic_node,
+                    schedule_save=schedule_save,
+                    all_users=all_users_list,
+                    values_dict=custom_field_values
+                )
 
             def update_metadata(val):
                 nonlocal current_metadata
@@ -881,35 +921,45 @@ def main_page():
             )
             
             save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')
-            # Bind to on_value_change (throttle is built-in option but we want custom debounce)
-            # 'input' event fires on every keystroke for input/textarea
+            # Bind label input to auto-save
             # IMPORTANT: We must accept the 'e' argument in lambda, even if unused, 
             # because on_value_change passes an event object.
             label_input.on_value_change(lambda e: schedule_save(e))
-            description_input.on_value_change(lambda e: schedule_save(e))
 
 
-            # Actions
+            # Actions - Dynamic Prompt Buttons
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
-            with ui.row().classes('w-full gap-2 justify-between'):
-                # Drill only visible if full consensus (all visible users interested)
-                current_interested = set(generic_node.get('interested_users', []))
-                visible_users_set = set(get_visible_users(project_data_dir))
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                # Get node type and load its prompts
+                node_type = generic_node.get('node_type', 'default')
+                node_type_manager = get_node_type_manager()
+                prompts = node_type_manager.load_prompts(node_type)
                 
-                # Drill Button
-                ui.button('Drill', on_click=lambda: do_drill_action(node_id)).props('icon=hub')
-                
-                # Voting Controls (Tri-state)
-                # Determine current state for visual highlighting
+                # Render a button for each prompt
+                for prompt in prompts:
+                    prompt_filename = prompt['filename']
+                    prompt_name = prompt['name']
+                    prompt_icon = prompt.get('material_logo', 'smart_toy')
+                    prompt_desc = prompt.get('description', '')
+                    
+                    # Create button with closure to capture prompt_filename
+                    def make_handler(pf):
+                        return lambda: do_drill_action(node_id, pf)
+                    
+                    btn = ui.button(prompt_name, on_click=make_handler(prompt_filename)).props(f'icon={prompt_icon}')
+                    if prompt_desc:
+                        btn.tooltip(prompt_desc)
+            
+            # Voting row
+            with ui.row().classes('w-full gap-2 justify-end mt-2'):
+                # Determine current vote state for visual highlighting
                 if not user_node:
                     curr_vote = 'maybe'
                 elif user_node.get('interested', True):
                     curr_vote = 'accepted'
                 else: 
                     curr_vote = 'rejected'
-
-
-
+                
                 render_tri_state_buttons(
                     curr_vote,
                     lambda action: set_vote(node_id, action, active_user)

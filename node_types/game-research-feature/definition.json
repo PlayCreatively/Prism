@@ -1,0 +1,32 @@
+{
+	"fields": [
+		
+		{
+			"key": "relevant_to",
+			"type": "user",
+			"multiple": true,
+			"label": "Relevant To"
+		},
+		{
+			"key": "keywords",
+			"type": "tag",
+			"label": "Keywords",
+			"multiple": true
+		},
+		{
+			"key": "methodology",
+			"type": "tag",
+			"label": "Methodology",
+			"selection": [
+				"Research through Design",
+				"Case Study",
+				"Iterative Design",
+				"Formal Analysis",
+				"User Study",
+				"Comparative Analysis",
+				"Mixed Methods"
+			],
+			"multiple": false
+		}
+	]
+}

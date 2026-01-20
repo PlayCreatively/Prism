@@ -5,7 +5,7 @@ Handles path resolution for both development mode and frozen (PyInstaller) execu
 - In development: paths are relative to the project root
 - When frozen: paths are relative to the executable location
 
-External data (db/, prompts/, config.json) lives NEXT TO the executable, not bundled inside.
+External data (db/, node_types/, config.json) lives NEXT TO the executable, not bundled inside.
 """
 
 import sys
@@ -34,11 +34,6 @@ def get_db_dir() -> Path:
     return get_app_dir() / "db"
 
 
-def get_prompts_dir() -> Path:
-    """Get the prompts directory containing AI prompt templates."""
-    return get_app_dir() / "prompts"
-
-
 def get_config_path() -> Path:
     """Get the path to the config file (stores API key, etc.)."""
     return get_app_dir() / "config.json"
@@ -52,13 +47,3 @@ def ensure_db_dir() -> Path:
     db_dir = get_db_dir()
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir
-
-
-def ensure_prompts_dir() -> Path:
-    """
-    Ensure the prompts directory exists, creating it if necessary.
-    Returns the path to the prompts directory.
-    """
-    prompts_dir = get_prompts_dir()
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    return prompts_dir

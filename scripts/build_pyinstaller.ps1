@@ -49,10 +49,10 @@ $distDir = "dist\PRISM"
 if (Test-Path $distDir) {
     Write-Host "[build] Copying external folders..."
     
-    # Copy prompts folder (user-editable)
-    if (Test-Path 'prompts') {
-        Copy-Item -Path "prompts" -Destination "$distDir\prompts" -Recurse -Force
-        Write-Host "[build] Copied prompts/ folder"
+    # Copy node_types folder (user-editable custom node definitions)
+    if (Test-Path 'node_types') {
+        Copy-Item -Path "node_types" -Destination "$distDir\node_types" -Recurse -Force
+        Write-Host "[build] Copied node_types/ folder"
     }
     
     # Create empty db folder
@@ -74,6 +74,7 @@ Getting Started:
 Folders:
 - db/ - Your project data (auto-created)
 - prompts/ - AI prompt templates (editable)
+- node_types/ - Custom node type definitions (editable)
 - config.json - Your settings (auto-created)
 "@
     Set-Content -Path "$distDir\README.txt" -Value $readmeContent

@@ -48,8 +48,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Copy prompts folder to dist
-          Copy-Item -Path "prompts" -Destination "dist/PRISM/prompts" -Recurse
+          # Copy node_types folder to dist
+          Copy-Item -Path "node_types" -Destination "dist/PRISM/node_types" -Recurse
           # Create empty db folder
           New-Item -ItemType Directory -Path "dist/PRISM/db" -Force
           # Create a README for users
@@ -63,7 +63,7 @@ jobs:
           
           Folders:
           - db/ - Your project data (auto-created)
-          - prompts/ - AI prompt templates (editable)
+          - node_types/ - Custom node type definitions (editable)
           - config.json - Your settings (auto-created)
           
           "@ | Out-File -FilePath "dist/PRISM/README.txt" -Encoding utf8
@@ -71,8 +71,8 @@ jobs:
       - name: Copy external folders (Unix)
         if: runner.os != 'Windows'
         run: |
-          # Copy prompts folder to dist
-          cp -r prompts dist/PRISM/prompts
+          # Copy node_types folder to dist
+          cp -r node_types dist/PRISM/node_types
           # Create empty db folder
           mkdir -p dist/PRISM/db
           # Create a README for users
@@ -86,7 +86,7 @@ jobs:
           
           Folders:
           - db/ - Your project data (auto-created)
-          - prompts/ - AI prompt templates (editable)
+          - node_types/ - Custom node type definitions (editable)
           - config.json - Your settings (auto-created)
           EOF
 

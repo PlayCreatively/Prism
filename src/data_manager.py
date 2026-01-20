@@ -31,6 +31,7 @@ class DataManager:
         """
         Load the global graph structure.
         Nodes are loaded from individual files in db/nodes/.
+        Auto-migrates nodes missing node_type field.
         """
         # Load nodes from individual files
         nodes = {}
@@ -39,6 +40,13 @@ class DataManager:
                 with open(node_file, "r", encoding="utf-8") as f:
                     node_data = json.load(f)
                     node_id = node_data.get("id", node_file.stem)
+                    
+                    # Auto-migrate: add node_type if missing
+                    if "node_type" not in node_data:
+                        node_data["node_type"] = "default"
+                        self._save_node(node_id, node_data)
+                        logger.info(f"Migrated node {node_id}: added node_type=default")
+                    
                     nodes[node_id] = node_data
             except Exception as e:
                 logger.warning(f"Failed to load node file {node_file}: {e}")
@@ -227,20 +235,38 @@ class DataManager:
 
     # --- Write Operations ---
 
-    def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True, description: str = "") -> Dict[str, Any]:
+    def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True, description: str = "", node_type: str = "default", custom_fields: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Adds node to Global graph.
         Optionally initializes user states (e.g. setting them as interested).
+        
+        Args:
+            label: Node title
+            parent_id: Parent node UUID
+            users: List of user IDs to set interest for
+            interested: Whether users are interested (True) or rejected (False)
+            description: Node description (markdown)
+            node_type: Node type identifier (default: "default")
+            custom_fields: Dict of custom field values defined by the node type
         """
         # 1. Create and save node directly to its own file
         node_id = str(uuid.uuid4())
         
         new_node_global = {
             "id": node_id,
+            "node_type": node_type,
             "label": label,
             "parent_id": parent_id,
             "description": description
         }
+        
+        # Add custom fields if provided
+        if custom_fields:
+            for key, value in custom_fields.items():
+                # Skip reserved keys
+                if key not in ('id', 'parent_id', 'node_type', 'label', 'description', 'metadata'):
+                    new_node_global[key] = value
+        
         self._save_node(node_id, new_node_global)
         
         # 2. Update Users
@@ -286,20 +312,22 @@ class DataManager:
 
     def update_shared_node(self, node_id: str, **kwargs) -> None:
         """
-        Updates global structure (Label, Parent, Description).
+        Updates global structure (Label, Parent, Description, node_type, custom fields).
         """
+        # Reserved keys that go to user files, not node files
+        user_keys = {'interested', 'metadata'}
+        
         g_data = self._load_global()
         if node_id in g_data["nodes"]:
             node = g_data["nodes"][node_id]
             changed = False
-            if "label" in kwargs:
-                node["label"] = kwargs["label"]
-                changed = True
-            if "parent_id" in kwargs:
-                node["parent_id"] = kwargs["parent_id"]
-                changed = True
-            if "description" in kwargs:
-                node["description"] = kwargs["description"]
+            
+            for key, value in kwargs.items():
+                # Skip user-specific keys
+                if key in user_keys:
+                    continue
+                # Update the node
+                node[key] = value
                 changed = True
             
             if changed:

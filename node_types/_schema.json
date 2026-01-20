@@ -1,0 +1,73 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "Node Type Definition",
+	"description": "Schema for validating node type definition.json files",
+	"type": "object",
+	"required": [
+		"fields"
+	],
+	"properties": {
+		"fields": {
+			"type": "array",
+			"description": "List of custom field definitions for this node type",
+			"items": {
+				"type": "object",
+				"required": [
+					"key",
+					"type"
+				],
+				"properties": {
+					"key": {
+						"type": "string",
+						"pattern": "^[a-z][a-z0-9_]*$",
+						"description": "Unique identifier for the field (lowercase, underscores allowed)",
+						"not": {
+							"enum": [
+								"id",
+								"parent_id",
+								"node_type",
+								"label",
+								"description",
+								"metadata"
+							]
+						}
+					},
+					"type": {
+						"type": "string",
+						"enum": [
+							"text",
+							"tag",
+							"user"
+						],
+						"description": "Semantic data type for the field"
+					},
+					"label": {
+						"type": "string",
+						"description": "Display label (defaults to key with underscores replaced by spaces)"
+					},
+					"required": {
+						"type": "boolean",
+						"default": false,
+						"description": "Whether this field must have a value to save"
+					},
+					"multiline": {
+						"type": "boolean",
+						"default": true,
+						"description": "For text type: whether to use textarea (true) or input (false)"
+					},
+					"selection": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "For tag type: if present, restricts values to this enum list"
+					},
+					"multiple": {
+						"type": "boolean",
+						"description": "For tag/user types: whether to allow multiple values"
+					}
+				}
+			}
+		}
+	}
+}

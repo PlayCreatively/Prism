@@ -1,6 +1,8 @@
 from nicegui import ui, run
-from typing import Dict, List, Any, Callable, Tuple
+from typing import Dict, List, Any, Callable, Tuple, Optional
 from src.ui_common import render_tri_state_buttons
+from src.node_type_manager import get_node_type_manager
+from src.components import render_markdown_textarea
 
 def build_ancestry_chain(node_id: str, graph: Dict[str, Any]) -> str:
     """Build full ancestry chain from root to current node (e.g., 'game design → minimalism → functional minimalism')"""
@@ -50,10 +52,25 @@ async def start_drill_process(
     active_user: str,
     on_complete: Callable[[], None],
     temperature: float = 1.0,
-    container: Any = None
+    container: Any = None,
+    prompt_filename: str = 'drill_down.md'
 ):
+    """
+    Start the drill process for a node using a specific prompt.
+    
+    Args:
+        node_id: The node to drill from
+        data_manager: DataManager instance
+        ai_agent: AIAgent instance
+        active_user: Current user ID
+        on_complete: Callback when done
+        temperature: AI temperature parameter
+        container: Optional UI container
+        prompt_filename: Which prompt file to use (e.g., 'drill_down.md')
+    """
     # Create a persistent notification that we can dismiss later
     loading_notification = None
+    node_type_manager = get_node_type_manager()
     
     if container:
         container.clear()
@@ -92,6 +109,9 @@ async def start_drill_process(
         # Build full ancestry chain for context
         full_ancestry = build_ancestry_chain(node_id, graph)
         
+        # Get node type for prompt loading
+        node_type = node.get('node_type', 'default')
+        
         # Get node description
         node_description = node.get('description', '')
         
@@ -122,19 +142,32 @@ async def start_drill_process(
     # 2. Call AI (IO Bound)
     try:
         print(f"[Drill] Calling AI with ancestry: {full_ancestry}")
+        print(f"[Drill] Node type: {node_type}, Prompt: {prompt_filename}")
         print(f"[Drill] Description: {node_description}")
         print(f"[Drill] Approved: {approved_children}")
         print(f"[Drill] Rejected: {rejected_children}")
+        
+        # Build full node data for the AI
+        node_data = dict(node)
+        node_data['label'] = full_ancestry  # Use ancestry chain as label
+        node_data['metadata'] = full_context_str
+        
         candidates = await run.io_bound(
-            ai_agent.generate_drill_candidates,
-            full_ancestry,
-            full_context_str,
+            ai_agent.generate_candidates_for_prompt,
+            node_type,
+            prompt_filename,
+            node_data,
             approved_children,
             rejected_children,
-            node_description,
             temperature
         )
-        print(f"[Drill] AI returned {len(candidates) if candidates else 0} candidates")
+        
+        # Get the produces_type from the first candidate (all should have same type)
+        produces_type = 'default'
+        if candidates and '_produces_type' in candidates[0]:
+            produces_type = candidates[0]['_produces_type']
+        
+        print(f"[Drill] AI returned {len(candidates) if candidates else 0} candidates of type '{produces_type}'")
         dismiss_loading()  # Success - dismiss loading notification
     except Exception as e:
         dismiss_loading()
@@ -200,14 +233,16 @@ async def start_drill_process(
 
                         render_tri_state_buttons(selection_state[suggestion], on_change)
                     
-                    # Description input
-                    def on_desc_change(e):
-                        description_state[suggestion] = e.value
+                    # Description with markdown preview
+                    def on_desc_change(new_val, s=suggestion):
+                        description_state[s] = new_val
                     
-                    ui.textarea(
-                        label='Description (optional)', 
-                        value=description_state[suggestion]
-                    ).classes('w-full').props('rows=2 dense borderless').on('change', on_desc_change)
+                    render_markdown_textarea(
+                        value=description_state[suggestion],
+                        label='Description',
+                        placeholder='Click to edit description...',
+                        on_change=on_desc_change
+                    )
 
             with ui.scroll_area().classes('h-96 w-full border border-slate-700 rounded p-2 bg-slate-900'):
                 for label in selection_state.keys():
@@ -217,13 +252,29 @@ async def start_drill_process(
                 count = 0
                 count_declined = 0
                 for text, status in selection_state.items():
+                    # Get the candidate data for custom fields
+                    candidate_data = next(
+                        (c for c in candidates if isinstance(c, dict) and c.get('label') == text),
+                        None
+                    )
+                    
+                    # Extract custom fields (everything except reserved keys)
+                    custom_fields = {}
+                    if candidate_data:
+                        reserved = {'label', 'description', 'id', 'parent_id', 'node_type', '_produces_type'}
+                        for key, value in candidate_data.items():
+                            if key not in reserved:
+                                custom_fields[key] = value
+                    
                     if status == 'accepted':
                         data_manager.add_node(
                             label=text, 
                             parent_id=node_id, 
                             users=[active_user],
                             interested=True,
-                            description=description_state.get(text, '')
+                            description=description_state.get(text, ''),
+                            node_type=produces_type,
+                            custom_fields=custom_fields
                         )
                         count += 1
                     elif status == 'rejected':
@@ -232,7 +283,9 @@ async def start_drill_process(
                             parent_id=node_id, 
                             users=[active_user],
                             interested=False,
-                            description=description_state.get(text, '')
+                            description=description_state.get(text, ''),
+                            node_type=produces_type,
+                            custom_fields=custom_fields
                         )
                         count_declined += 1
                 
