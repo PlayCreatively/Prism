@@ -46,6 +46,15 @@ ui.add_head_html('''
         ::-webkit-scrollbar-thumb:hover {
             background: #334155; /* slate-700 */
         }
+        
+        h1, h2, h3, h4, h5, h6 {
+            margin-top: 8px;
+            margin-bottom: 0;
+        }
+        
+        div :is(h1, h2, h3, h4, h5, h6):first-of-type {
+            margin-top: 0;
+        }
     </style>
 ''', shared=True)
 
