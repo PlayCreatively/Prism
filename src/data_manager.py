@@ -199,6 +199,7 @@ class DataManager:
             
             # Metadata merge strategy: First user with content wins, or empty.
             combined_metadata = ""
+            metadata_by_user = {}
             
             for u in users:
                 u_node = user_states[u].get(nid)
@@ -212,8 +213,12 @@ class DataManager:
                     # If 'interested' key is absent, user is pending (may have notes but no vote)
                     
                     # Capture metadata if present
-                    if not combined_metadata and u_node.get("metadata"):
-                        combined_metadata = u_node.get("metadata")
+                    if u_node.get("metadata"):
+                        # Record per-user metadata for potential attribution
+                        metadata_by_user[u] = u_node.get("metadata")
+                        # Preserve legacy "first wins" behavior for combined field
+                        if not combined_metadata:
+                            combined_metadata = u_node.get("metadata")
                 else:
                     # No record for this user = pending (haven't interacted at all)
                     pass
@@ -221,6 +226,7 @@ class DataManager:
             node_out['interested_users'] = interested
             node_out['rejected_users'] = rejected
             node_out['metadata'] = combined_metadata
+            node_out['metadata_by_user'] = metadata_by_user
             
             result_nodes.append(node_out)
 

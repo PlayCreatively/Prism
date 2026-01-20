@@ -120,14 +120,14 @@ def build_echart_options(
         
         # Apply Active User Context Rules
         has_rejections = len(rejected) > 0
-        is_interested = active_user in users
+        is_interested = True if active_user in users else False if active_user in rejected else None
             
         if has_rejections:
             # Deprioritized: Anyone rejected it
             # We use darkening instead of opacity to avoid additive transparency artifacts
             color = lerp_hex(color, background_color, 0.9)
             base_size = base_size * 0.6
-        elif not is_interested and not is_dead:
+        elif is_interested is None and not is_dead:
             # Pending: No rejections, Active User hasn't voted (isn't in interested)
             # Visual: Thick White Solid Border
             border_width = 4
@@ -169,11 +169,53 @@ def build_echart_options(
             size = 60
             label_cfg['fontSize'] = 18
 
-        # Store description for tooltip
-        description = n.get('description', '')
+        # Store description for tooltip (trim to 60 chars)
+        description = n.get('description', '') or ''
+        if len(description) > 60:
+            desc_short = description[:60].rstrip() + '…'
+        else:
+            desc_short = description
+
+        # Only show metadata for the active user (case-insensitive username match).
+        # Do NOT fall back to aggregated metadata here.
+        metadata_text = ''
+        mbu = n.get('metadata_by_user') or {}
+        if active_user:
+            # Direct match
+            metadata_text = mbu.get(active_user)
+            if metadata_text is None:
+                # Case-insensitive search through keys
+                lower_target = active_user.lower()
+                for k, v in mbu.items():
+                    if k.lower() == lower_target:
+                        metadata_text = v
+                        break
+            if metadata_text is None:
+                metadata_text = ''
+
         tooltip_text = label
-        if description:
-            tooltip_text += f"<br/><span style='color:#999;font-size:11px'>{description}</span>"
+        if desc_short:
+            tooltip_text += f"<br/><span style='color:#999;font-size:11px'>{desc_short}</span>"
+        if metadata_text:
+            # Color the quote by the active user's vote: accepted=green, rejected=red, pending=gray
+            try:
+                if active_user:
+                    if is_interested is True:
+                        tooltip_color = '#22c55e'  # green (accepted)
+                    elif is_interested is False:
+                        tooltip_color = '#ef4444'  # red (rejected)
+                    else:
+                        tooltip_color = '#9CA3AF'  # gray (pending/no vote)
+                else:
+                    tooltip_color = '#cccccc'
+            except Exception:
+                tooltip_color = '#cccccc'
+            # Render metadata as a bold blockquote with a colored left border and bold text
+            tooltip_text += (
+                "<br/><blockquote "
+                f"style='margin:0;padding:6px 8px;border-left:4px solid {tooltip_color};color:{tooltip_color};font-size:11px'>"
+                f"<strong>{metadata_text}</strong></blockquote>"
+            )
         
         e_node = {
             'id': nid,
