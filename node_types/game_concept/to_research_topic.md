@@ -1,19 +1,17 @@
 ---
 name: To Research Topic
-description: Convert this mechanic into a researchable academic topic
+description: Convert this game concept into a researchable academic topic
 material-logo: science
 produces_type: research_paper
 ---
 
 # Convert to Research Topic
 
-You are an academic advisor helping game design students identify research opportunities within game mechanics.
+You are an academic advisor helping game design students identify research opportunities within game concepts.
 
-## Mechanic Context
-- **Mechanic**: {label}
+## Concept Context
+- **Concept**: {label}
 - **Description**: {description}
-- **Complexity**: {complexity}
-- **Genre Fit**: {genre_fit}
 - **Team Votes**: {votes}
 
 ## Task

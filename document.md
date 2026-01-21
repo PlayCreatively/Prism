@@ -277,7 +277,19 @@ When a user clicks a node, a floating panel appears (or slides in) containing al
     *   **UI:** Vertical list of candidates.
     *   **Controls:** Each item has [✅ Accept] [❌ Reject] [⬜ Ignore].
 
-3.  **Graph Actions:**
+3.  **Prompt Button Management:**
+    *   **Edit Existing Prompts:** Hover over any action button to reveal a small circular pencil icon at the top-right corner. Click to open the prompt editor.
+    *   **Create New Prompts:** Click the circular "+" button next to the action buttons to create a new prompt for this node type.
+    *   **Prompt Editor Modal:** Opens a full-screen modal with:
+        *   **Name Field:** Large editable header-style input for the prompt display name.
+        *   **Description Field:** Single-line text input for the tooltip description.
+        *   **Icon Picker:** Searchable dropdown with icon preview for selecting Material Design icons.
+        *   **Produces Type Dropdown:** Select which node type this prompt generates (from existing types).
+        *   **Body Editor:** Markdown textarea for the prompt content. Use placeholders like `{label}`, `{description}`, `{metadata}`, `{votes}`, `{approved_children}`, `{rejected_children}`, `{children}`, `{output_schema}`.
+    *   **Save/Cancel/Delete:** Save persists changes to the `.md` file in the node type folder. Delete immediately removes the prompt file (no confirmation).
+    *   **Auto-Refresh:** Prompt buttons automatically refresh after save/delete operations.
+
+4.  **Graph Actions:**
     *   **"Prune":** Delete node (only if created locally and unpushed).
     *   **"Connect":** Draw edge to another node.
 

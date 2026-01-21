@@ -7,6 +7,20 @@ from openai import OpenAI
 from src.node_type_manager import get_node_type_manager
 
 
+# Prompt placeholder definitions with descriptions for UI display
+# Each tuple: (placeholder_key, description)
+PROMPT_PLACEHOLDERS = [
+    ('{label}', 'The node title/name (or ancestry chain for context)'),
+    ('{description}', 'The node description text'),
+    ('{metadata}', "Current user's private notes on this node"),
+    ('{votes}', 'Summary of all user votes (interested/rejected) for this node'),
+    ('{approved_children}', 'Labels of child nodes accepted by users'),
+    ('{rejected_children}', 'Labels of child nodes rejected by users'),
+    ('{children}', 'Full details of all child nodes with their vote information'),
+    ('{output_schema}', 'Auto-generated JSON schema based on produces_type'),
+]
+
+
 class AIAgent:
     def __init__(self):
         self.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))

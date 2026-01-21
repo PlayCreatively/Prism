@@ -61,7 +61,7 @@ from src.data_manager import DataManager
 from src.drill_engine import DrillEngine
 from src.node_type_manager import get_node_type_manager
 from src.custom_fields import render_custom_fields
-from src.components import render_markdown_textarea
+from src.components import render_markdown_textarea, render_prompt_edit_modal
 
 try:
     from src.ai_agent import AIAgent
@@ -954,26 +954,84 @@ def main_page():
 
             # Actions - Dynamic Prompt Buttons
             ui.label('ACTIONS').classes('text-xs font-bold text-gray-400 mt-4')
-            with ui.row().classes('w-full gap-2 flex-wrap'):
-                # Get node type and load its prompts
-                node_type = generic_node.get('node_type', 'default')
-                node_type_manager = get_node_type_manager()
-                prompts = node_type_manager.load_prompts(node_type)
+            
+            # Container for prompt buttons that we can refresh
+            prompt_buttons_container = ui.row().classes('w-full gap-2 flex-wrap items-center')
+            
+            def render_prompt_buttons():
+                """Render all prompt buttons with edit overlays and plus button."""
+                prompt_buttons_container.clear()
                 
-                # Render a button for each prompt
-                for prompt in prompts:
-                    prompt_filename = prompt['filename']
-                    prompt_name = prompt['name']
-                    prompt_icon = prompt.get('material_logo', 'smart_toy')
-                    prompt_desc = prompt.get('description', '')
+                with prompt_buttons_container:
+                    # Get node type and load its prompts
+                    node_type = generic_node.get('node_type', 'default')
+                    node_type_mgr = get_node_type_manager()
+                    prompts = node_type_mgr.load_prompts(node_type)
+                    available_types = node_type_mgr.list_types()
                     
-                    # Create button with closure to capture prompt_filename
-                    def make_handler(pf):
-                        return lambda: do_drill_action(node_id, pf)
+                    # Render a button for each prompt with edit overlay
+                    for prompt in prompts:
+                        prompt_filename = prompt['filename']
+                        prompt_name = prompt['name']
+                        prompt_icon = prompt.get('material_logo', 'smart_toy')
+                        prompt_desc = prompt.get('description', '')
+                        
+                        # Wrapper div for positioning the edit button
+                        with ui.element('div').classes('relative group'):
+                            # Main prompt button
+                            def make_handler(pf):
+                                return lambda: do_drill_action(node_id, pf)
+                            
+                            btn = ui.button(prompt_name, on_click=make_handler(prompt_filename)).props(f'icon={prompt_icon}')
+                            if prompt_desc:
+                                btn.tooltip(prompt_desc)
+                            
+                            # Edit button overlay (pencil icon, visible on hover)
+                            def make_edit_handler(p):
+                                def open_edit_modal():
+                                    dialog = render_prompt_edit_modal(
+                                        node_type=node_type,
+                                        available_types=available_types,
+                                        node_type_manager=node_type_mgr,
+                                        on_save=render_prompt_buttons,
+                                        on_delete=render_prompt_buttons,
+                                        existing_prompt=p,
+                                    )
+                                    dialog.open()
+                                return open_edit_modal
+                            
+                            edit_btn = ui.button(
+                                icon='edit', 
+                                on_click=make_edit_handler(prompt)
+                            ).props('flat round dense size=xs').classes(
+                                'absolute -top-2 -right-2 bg-slate-700 text-gray-300 '
+                                'opacity-0 group-hover:opacity-100 transition-opacity z-10 '
+                                'hover:bg-slate-600 hover:text-white'
+                            ).style('width: 24px; height: 24px; min-width: 24px; min-height: 24px;')
+                            edit_btn.tooltip('Edit prompt')
                     
-                    btn = ui.button(prompt_name, on_click=make_handler(prompt_filename)).props(f'icon={prompt_icon}')
-                    if prompt_desc:
-                        btn.tooltip(prompt_desc)
+                    # Plus button to create new prompt
+                    def open_create_modal():
+                        node_type_mgr_local = get_node_type_manager()
+                        nt = generic_node.get('node_type', 'default')
+                        available = node_type_mgr_local.list_types()
+                        dialog = render_prompt_edit_modal(
+                            node_type=nt,
+                            available_types=available,
+                            node_type_manager=node_type_mgr_local,
+                            on_save=render_prompt_buttons,
+                            on_delete=render_prompt_buttons,
+                            existing_prompt=None,
+                        )
+                        dialog.open()
+                    
+                    add_btn = ui.button(icon='add', on_click=open_create_modal).props(
+                        'round dense outline'
+                    ).classes('text-gray-400 hover:text-white hover:bg-slate-700')
+                    add_btn.tooltip('Create new prompt')
+            
+            # Initial render
+            render_prompt_buttons()
             
             # Voting row
             with ui.row().classes('w-full gap-2 justify-end mt-2'):

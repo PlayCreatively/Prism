@@ -13,7 +13,7 @@ EDGE_MIDDLE_TOLERANCE = 0.10
 EDGE_HOVER_TOLERANCE = 20
 
 # Distance in pixels to detect nearby nodes for connection
-CONNECTION_RADIUS = 60
+CONNECTION_RADIUS = 110
 
 # Radius in pixels for direct node click (delete action)
 NODE_CLICK_RADIUS = 25

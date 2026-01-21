@@ -16,27 +16,10 @@
 			"multiple": false
 		},
 		{
-			"key": "keywords",
-			"type": "tag",
-			"label": "Keywords",
-			"multiple": true
-		},
-		{
-			"key": "abstract",
-			"type": "text",
-			"label": "Abstract",
-			"multiline": true
-		},
-		{
 			"key": "research_question",
 			"type": "text",
 			"label": "Research Question",
 			"multiline": false
-		},
-		{
-			"key": "author",
-			"type": "user",
-			"label": "Author"
 		}
 	]
 }

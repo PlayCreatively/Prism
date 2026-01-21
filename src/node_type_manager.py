@@ -364,6 +364,136 @@ class NodeTypeManager:
         """Clear all cached data."""
         self._cache.clear()
         self._prompts_cache.clear()
+    
+    def clear_prompts_cache(self, type_name: Optional[str] = None):
+        """Clear prompts cache for a specific type or all types."""
+        if type_name:
+            self._prompts_cache.pop(type_name, None)
+        else:
+            self._prompts_cache.clear()
+    
+    def save_prompt(
+        self, 
+        type_name: str, 
+        name: str, 
+        description: str, 
+        icon: str, 
+        produces_type: str, 
+        body: str,
+        existing_filename: Optional[str] = None
+    ) -> str:
+        """
+        Save a prompt file (create or update).
+        
+        Args:
+            type_name: The node type folder to save in
+            name: Prompt display name (for YAML frontmatter)
+            description: Prompt description (for YAML frontmatter)
+            icon: Material icon name (for YAML frontmatter)
+            produces_type: Node type this prompt creates
+            body: The prompt markdown content (without frontmatter)
+            existing_filename: If updating, the current filename
+        
+        Returns:
+            The filename of the saved prompt
+        """
+        type_dir = self.node_types_dir / type_name
+        type_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate filename from name if creating new, otherwise use existing
+        if existing_filename:
+            filename = existing_filename
+        else:
+            # Convert name to snake_case filename
+            filename = re.sub(r'[^\w\s-]', '', name.lower())
+            filename = re.sub(r'[-\s]+', '_', filename).strip('_')
+            filename = f"{filename}.md"
+            
+            # Ensure unique filename
+            base_name = filename[:-3]  # Remove .md
+            counter = 1
+            while (type_dir / filename).exists():
+                filename = f"{base_name}_{counter}.md"
+                counter += 1
+        
+        # Build YAML frontmatter
+        frontmatter = f"""---
+name: {name}
+description: {description}
+material-logo: {icon}
+produces_type: {produces_type}
+---
+
+"""
+        
+        # Combine frontmatter and body
+        content = frontmatter + body.strip() + "\n"
+        
+        # Write file
+        filepath = type_dir / filename
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Clear cache for this type
+        self.clear_prompts_cache(type_name)
+        
+        return filename
+    
+    def delete_prompt(self, type_name: str, filename: str) -> bool:
+        """
+        Delete a prompt file.
+        
+        Args:
+            type_name: The node type folder
+            filename: The prompt filename to delete
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        filepath = self.node_types_dir / type_name / filename
+        
+        if filepath.exists():
+            filepath.unlink()
+            self.clear_prompts_cache(type_name)
+            return True
+        
+        return False
+    
+    def get_prompt(self, type_name: str, filename: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific prompt by type and filename.
+        
+        Returns prompt data dict or None if not found.
+        """
+        filepath = self.node_types_dir / type_name / filename
+        
+        if not filepath.exists():
+            return None
+        
+        return self._parse_prompt_file(filepath, type_name)
+    
+    def get_default_prompt_template(self) -> str:
+        """Get the default template for new prompts."""
+        return """# Prompt Title
+
+You are an expert helping to explore and develop ideas.
+
+## Context
+- **Label**: {label}
+- **Description**: {description}
+- **Team Notes**: {metadata}
+- **Team Votes**: {votes}
+
+## Existing Children
+- **Approved**: {approved_children}
+- **Rejected**: {rejected_children}
+
+## Task
+Generate 2-3 suggestions that expand on this concept.
+
+## Output Format
+{output_schema}
+"""
 
 
 # Global instance for convenience
