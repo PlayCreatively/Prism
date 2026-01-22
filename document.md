@@ -62,7 +62,7 @@ The visual language extends beyond consensus color to reflect the Active User's 
 ## 3. System Architecture
 
 ### 3.0 Multi-Project Support
-The system supports multiple isolated projects, each with its own graph, users, and git repository.
+The system supports multiple isolated projects, each with its own graph, users, node types, and git repository.
 
 **Project Structure:**
 ```
@@ -74,10 +74,18 @@ db/
       Sasha.json
     nodes/          # Node files (ideas)
       {uuid}.json
+    node_types/     # Project-specific node types and prompts
+      default/
+        definition.json
+        drill_down.md
+      game_concept/
+        definition.json
+        drill_down.md
   {another-project}/
     .git/
     data/
     nodes/
+    node_types/
 ```
 
 **Project Features:**

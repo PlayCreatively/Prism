@@ -107,6 +107,7 @@ from src.project_manager import (
     project_exists, 
     get_project_data_dir, 
     get_project_git_path,
+    get_project_node_types_dir,
     create_project,
     get_project_users,
     add_user_to_project
@@ -313,6 +314,7 @@ def main_page():
     # --- Project-specific initialization ---
     project_data_dir = get_project_data_dir(current_project)
     project_git_path = get_project_git_path(current_project)
+    project_node_types_dir = get_project_node_types_dir(current_project)
     
     # Initialize project-specific managers
     data_manager = DataManager(data_dir=project_data_dir)
@@ -348,6 +350,7 @@ def main_page():
         'last_graph_hash': 0,
         'active_user': default_active_user,
         'active_project': current_project,
+        'project_node_types_dir': project_node_types_dir,
         'show_dead': app.storage.user.get('show_dead', False),
         'last_selection_time': 0,
         'temperature': app.storage.user.get('temperature', 0.7),
@@ -701,7 +704,8 @@ def main_page():
             active_user=active_user,
             on_complete=refresh_chart_ui,
             temperature=state.get('temperature', 0.7),
-            prompt_filename=prompt_filename
+            prompt_filename=prompt_filename,
+            node_types_dir=state['project_node_types_dir']
         )
             
     def open_add_dialog():
@@ -862,7 +866,7 @@ def main_page():
 
             # --- Prepare custom fields data (render after schedule_save is defined) ---
             node_type = generic_node.get('node_type', 'default')
-            node_type_manager = get_node_type_manager()
+            node_type_manager = get_node_type_manager(state['project_node_types_dir'])
             type_def = node_type_manager.load_type(node_type)
             custom_fields = type_def.get('fields', []) if type_def else []
             all_users_list = get_all_users(project_data_dir)
@@ -965,7 +969,7 @@ def main_page():
                 with prompt_buttons_container:
                     # Get node type and load its prompts
                     node_type = generic_node.get('node_type', 'default')
-                    node_type_mgr = get_node_type_manager()
+                    node_type_mgr = get_node_type_manager(state['project_node_types_dir'])
                     prompts = node_type_mgr.load_prompts(node_type)
                     available_types = node_type_mgr.list_types()
                     
@@ -1012,7 +1016,7 @@ def main_page():
                     
                     # Plus button to create new prompt
                     def open_create_modal():
-                        node_type_mgr_local = get_node_type_manager()
+                        node_type_mgr_local = get_node_type_manager(state['project_node_types_dir'])
                         nt = generic_node.get('node_type', 'default')
                         available = node_type_mgr_local.list_types()
                         dialog = render_prompt_edit_modal(

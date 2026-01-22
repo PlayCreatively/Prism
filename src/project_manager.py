@@ -5,9 +5,11 @@ Handles multi-project support where each project is a folder inside db/
 with its own:
 - data/ folder (user state files)
 - nodes/ folder (node files)
+- node_types/ folder (custom node type definitions and prompts)
 - .git/ folder (separate repository)
 
 Projects are completely isolated from each other.
+Node types are copied from the default node_types/ folder when a project is created.
 """
 
 import subprocess
@@ -75,6 +77,11 @@ def get_project_git_path(project_name: str) -> str:
     return str(get_project_path(project_name))
 
 
+def get_project_node_types_dir(project_name: str) -> Path:
+    """Get the node_types directory path for a project."""
+    return get_project_path(project_name) / "node_types"
+
+
 def create_project(
     project_name: str,
     initial_username: str,
@@ -127,9 +134,11 @@ def create_project(
         # Create project structure
         data_dir = project_path / "data"
         nodes_dir = project_path / "nodes"
+        node_types_dir = project_path / "node_types"
         
         data_dir.mkdir(parents=True, exist_ok=True)
         nodes_dir.mkdir(parents=True, exist_ok=True)
+        node_types_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize git repository if requested
         if init_git:

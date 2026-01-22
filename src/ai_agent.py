@@ -4,8 +4,6 @@ import traceback
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
 
-from src.node_type_manager import get_node_type_manager
-
 
 # Prompt placeholder definitions with descriptions for UI display
 # Each tuple: (placeholder_key, description)
@@ -24,18 +22,22 @@ PROMPT_PLACEHOLDERS = [
 class AIAgent:
     def __init__(self):
         self.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        self.node_type_manager = get_node_type_manager()
 
-    def _load_prompt_for_type(self, node_type: str, prompt_filename: str) -> Optional[Dict[str, Any]]:
+    def _load_prompt_for_type(self, node_type: str, prompt_filename: str, node_type_manager) -> Optional[Dict[str, Any]]:
         """
         Load a specific prompt from a node type's folder.
+        
+        Args:
+            node_type: The node type to load prompts for
+            prompt_filename: The prompt file to load
+            node_type_manager: Project-specific NodeTypeManager instance
         
         Returns dict with:
           - content: The prompt body with variables
           - produces_type: What node type the output should be
           - name: Button label
         """
-        prompts = self.node_type_manager.load_prompts(node_type)
+        prompts = node_type_manager.load_prompts(node_type)
         for prompt in prompts:
             if prompt['filename'] == prompt_filename:
                 return prompt
@@ -71,7 +73,8 @@ class AIAgent:
         node_data: Dict[str, Any],
         approved_children: List[str] = None,
         rejected_children: List[str] = None,
-        temperature: float = 1.0
+        temperature: float = 1.0,
+        node_type_manager = None
     ) -> List[Dict[str, Any]]:
         """
         Generate candidates using a specific prompt from a node type.
@@ -83,18 +86,22 @@ class AIAgent:
             approved_children: List of approved child labels
             rejected_children: List of rejected child labels
             temperature: AI temperature parameter
+            node_type_manager: Project-specific NodeTypeManager instance (required)
             
         Returns:
             List of candidate dicts with label, description, and custom fields
         """
+        if node_type_manager is None:
+            raise ValueError("node_type_manager is required")
+        
         # Load the prompt
-        prompt_info = self._load_prompt_for_type(node_type, prompt_filename)
+        prompt_info = self._load_prompt_for_type(node_type, prompt_filename, node_type_manager)
         if not prompt_info:
             raise ValueError(f"Prompt '{prompt_filename}' not found for type '{node_type}'")
         
         # Get the output type and generate schema
         produces_type = prompt_info.get('produces_type', node_type)
-        output_schema = self.node_type_manager.generate_output_schema(produces_type)
+        output_schema = node_type_manager.generate_output_schema(produces_type)
         
         # Build variables dict from node data
         variables = {
@@ -215,22 +222,3 @@ class AIAgent:
             traceback.print_exc()
             raise
 
-    def generate_drill_candidates(self, label, metadata, approved_children, rejected_children=None, description="", temperature=1.0, node_type: str = "default"):
-        """
-        Legacy method for backward compatibility.
-        Now routes to generate_candidates_for_prompt.
-        """
-        node_data = {
-            'label': label,
-            'description': description,
-            'metadata': metadata
-        }
-        
-        return self.generate_candidates_for_prompt(
-            node_type=node_type,
-            prompt_filename='drill_down.md',
-            node_data=node_data,
-            approved_children=approved_children,
-            rejected_children=rejected_children,
-            temperature=temperature
-        )

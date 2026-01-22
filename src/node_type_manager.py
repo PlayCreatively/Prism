@@ -45,10 +45,55 @@ class NodeTypeManager:
     def _ensure_dir(self):
         """Ensure node_types directory exists."""
         self.node_types_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _ensure_default_type(self):
+        """Create a minimal 'default' node type if no types exist."""
+        self._ensure_dir()
+        
+        # Check if any node types exist
+        has_types = any(
+            item.is_dir() and not item.name.startswith('_')
+            for item in self.node_types_dir.iterdir()
+        ) if self.node_types_dir.exists() else False
+        
+        if not has_types:
+            # Create minimal default type
+            default_dir = self.node_types_dir / "default"
+            default_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create definition.json with empty fields
+            definition_path = default_dir / "definition.json"
+            definition_path.write_text('{\n\t"fields": []\n}', encoding='utf-8')
+            
+            # Create a basic drill_down.md prompt
+            drill_prompt = default_dir / "drill_down.md"
+            drill_prompt.write_text('''---
+name: Drill Down
+description: Generate sub-concepts for this idea
+material-logo: arrow_downward
+---
+You are a research assistant helping to brainstorm sub-concepts.
+
+**Current Topic:** {label}
+
+**Description:** {description}
+
+**Context/Notes:** {metadata}
+
+**Already Explored (Approved):** {approved_children}
+
+**Already Rejected:** {rejected_children}
+
+Generate 5 new sub-concepts that branch off from this topic.
+Each should be a distinct angle or aspect worth exploring.
+
+Return JSON matching this schema:
+{output_schema}
+''', encoding='utf-8')
         
     def list_types(self) -> List[str]:
-        """Return list of available node type names."""
-        self._ensure_dir()
+        """Return list of available node type names. Creates default type if none exist."""
+        self._ensure_default_type()
         types = []
         for item in self.node_types_dir.iterdir():
             if item.is_dir() and not item.name.startswith('_'):
@@ -496,12 +541,29 @@ Generate 2-3 suggestions that expand on this concept.
 """
 
 
-# Global instance for convenience
-_manager: Optional[NodeTypeManager] = None
+# Per-project manager instances keyed by node_types_dir path
+_managers: Dict[str, 'NodeTypeManager'] = {}
 
-def get_node_type_manager() -> NodeTypeManager:
-    """Get the global NodeTypeManager instance."""
-    global _manager
-    if _manager is None:
-        _manager = NodeTypeManager()
-    return _manager
+def get_node_type_manager(node_types_dir: Path) -> 'NodeTypeManager':
+    """
+    Get a NodeTypeManager instance for the given node_types directory.
+    
+    Args:
+        node_types_dir: Path to project-specific node_types folder (required).
+    
+    Returns:
+        NodeTypeManager instance (cached per directory)
+    """
+    if node_types_dir is None:
+        raise ValueError("node_types_dir is required - must specify project node_types path")
+    
+    key = str(node_types_dir)
+    if key not in _managers:
+        _managers[key] = NodeTypeManager(node_types_dir=node_types_dir)
+    return _managers[key]
+
+
+def clear_node_type_managers():
+    """Clear all cached NodeTypeManager instances (useful for testing)."""
+    global _managers
+    _managers.clear()

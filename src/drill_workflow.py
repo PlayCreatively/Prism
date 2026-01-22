@@ -1,5 +1,6 @@
 from nicegui import ui, run
 from typing import Dict, List, Any, Callable, Tuple, Optional
+from pathlib import Path
 from src.ui_common import render_tri_state_buttons
 from src.node_type_manager import get_node_type_manager
 from src.components import render_markdown_textarea
@@ -143,7 +144,8 @@ async def start_drill_process(
     on_complete: Callable[[], None],
     temperature: float = 1.0,
     container: Any = None,
-    prompt_filename: str = 'drill_down.md'
+    prompt_filename: str = 'drill_down.md',
+    node_types_dir: Path = None
 ):
     """
     Start the drill process for a node using a specific prompt.
@@ -157,10 +159,11 @@ async def start_drill_process(
         temperature: AI temperature parameter
         container: Optional UI container
         prompt_filename: Which prompt file to use (e.g., 'drill_down.md')
+        node_types_dir: Path to project-specific node_types folder
     """
     # Create a persistent notification that we can dismiss later
     loading_notification = None
-    node_type_manager = get_node_type_manager()
+    node_type_manager = get_node_type_manager(node_types_dir)
     
     if container:
         container.clear()
@@ -261,7 +264,8 @@ async def start_drill_process(
             node_data,
             approved_children,
             rejected_children,
-            temperature
+            temperature,
+            node_type_manager
         )
         
         # Get the produces_type from the first candidate (all should have same type)
