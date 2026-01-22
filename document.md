@@ -165,6 +165,52 @@ The system supports converting the complex UUID-bound graph into generic Project
 *   **Import from Template:** Ingests a Label Tree, generates **Fresh UUIDs**, and seeds new node files in `db/{project}/nodes/`.
     *   *Use Case:* "Cloning" a successful brainstorming structure to start a new project with a clean slate.
 
+### 3.5 Shared Data Editing Rules
+These rules govern how users can modify nodes in a collaborative project. They apply to **both Git and Supabase backends**.
+
+**Principle:** Protect other users' contributions while allowing free editing of personal work.
+
+**Rule 1: Unencumbered Nodes (Free Editing)**
+*   **Condition:** A node has **no external user data** attached—only the active user has interacted with it (voted, added notes, etc.).
+*   **Permissions:** The active user can freely:
+    *   Rename the node (change label)
+    *   Edit the description
+    *   Delete the node entirely
+    *   Change the parent (move in hierarchy)
+    *   Modify any node properties
+*   **Rationale:** If you're the only person who has touched a node, your edits affect no one else.
+
+**Rule 2: Encumbered Nodes (Protected Editing)**
+*   **Condition:** A node has **external user data** attached—at least one other user has:
+    *   Voted on it (interested: true or false)
+    *   Added metadata/notes to it
+    *   Created child nodes under it
+*   **Restrictions:**
+    *   **Cannot Delete:** The delete action is blocked entirely.
+    *   **Edit Warning:** When attempting to modify any node property (label, description, parent, etc.), the system displays a confirmation dialog:
+        ```
+        ⚠️ This change will affect other users
+        
+        The following users have data connected to this node:
+        • Alex (voted: interested, has notes)
+        • Sasha (voted: not interested)
+        
+        Are you sure you want to proceed?
+        [Cancel] [Proceed Anyway]
+        ```
+    *   **Audit Trail:** If the user proceeds, the change is logged with timestamp and modifier identity.
+*   **Rationale:** Other users have invested cognitive effort into this node. Deleting it would erase their votes and notes. Renaming it might invalidate their understanding. They deserve a heads-up.
+
+**Edge Cases:**
+*   **Rejected-Only Nodes:** If all external users have `interested: false` (rejected), the node is still protected—rejection is valid user data.
+*   **Pending Nodes:** Nodes that exist but have no votes from anyone are considered unencumbered and freely editable by anyone.
+*   **Child Node Dependency:** If deleting a node would orphan child nodes that have external user data, the deletion is blocked with a message explaining the dependency chain.
+
+**UI Implementation:**
+*   The **Delete** button is disabled (grayed out) for encumbered nodes, with a tooltip: "Cannot delete: other users have data on this node"
+*   The **Edit** actions show the warning modal before applying changes
+*   The node detail panel displays an "Affected Users" badge when viewing encumbered nodes
+
 ---
 
 ## 4. The Workflows
@@ -311,4 +357,526 @@ When a user clicks a node, a floating panel appears (or slides in) containing al
 *   **Graph Engine:** NetworkX (Logic) + Apache ECharts (via `ui.echart`).
     *   *Why:* Native NiceGUI element. Highly performant, handles thousands of nodes, supports physics engines (force-directed), and accepts Python dictionaries as configuration.
 *   **AI Engine:** OpenAI API (GPT-4o) for structuring CSVs and generating sub-concepts.
-*   **Version Control:** Git.
+*   **Version Control:** Git (local backend) or Supabase (cloud backend).
+
+---
+
+## 7. Supabase Cloud Backend (Optional)
+
+### 7.0 Overview
+The system supports two storage backends per project:
+1. **Git Backend (Default):** Local file storage with git sync — the current implementation.
+2. **Supabase Backend (Optional):** Cloud-hosted PostgreSQL with real-time sync, authentication, and public project URLs.
+
+Projects can choose their backend at creation time. The choice affects:
+- How data is stored and synchronized
+- Whether authentication is required
+- Whether the project can be publicly accessible via URL
+
+### 7.1 Architecture: Dual Backend Pattern
+
+**Abstract Interface (`StorageBackend` Protocol):**
+```
+┌─────────────────────────────────────────────────────────┐
+│                    StorageBackend                        │
+│                   (Abstract Protocol)                    │
+├─────────────────────────────────────────────────────────┤
+│  get_graph() -> Dict                                    │
+│  save_node(node_id, data) -> None                       │
+│  delete_node(node_id) -> None                           │
+│  load_user(user_id) -> Dict                             │
+│  save_user(data) -> None                                │
+│  list_users() -> List[str]                              │
+│  sync() -> None  # Pull latest (git pull / realtime)    │
+│  push() -> None  # Push changes (git push / no-op)      │
+│  subscribe(callback) -> None  # Real-time updates       │
+└─────────────────────────────────────────────────────────┘
+                           │
+          ┌────────────────┴────────────────┐
+          ▼                                 ▼
+┌───────────────────┐            ┌────────────────────────┐
+│    GitBackend     │            │   SupabaseBackend      │
+│    (Current)      │            │   (New)                │
+├───────────────────┤            ├────────────────────────┤
+│ - File I/O        │            │ - REST API calls       │
+│ - git pull/push   │            │ - Supabase Realtime    │
+│ - Local storage   │            │ - PostgreSQL storage   │
+│ - No auth required│            │ - JWT authentication   │
+└───────────────────┘            └────────────────────────┘
+```
+
+**Project Configuration (`db/{project}/config.json`):**
+```json
+{
+  "storage_backend": "supabase",
+  "supabase_project_url": "https://abc123.supabase.co",
+  "supabase_anon_key": "eyJ...",
+  "supabase_project_id": "uuid-of-project-in-supabase",
+  "is_public": true
+}
+```
+
+For git-based projects, `config.json` is optional or contains:
+```json
+{
+  "storage_backend": "git"
+}
+```
+
+### 7.2 Supabase Database Schema
+
+**Tables:**
+
+```sql
+-- Users table (extends Supabase auth.users)
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    username TEXT UNIQUE NOT NULL,
+    display_name TEXT,
+    avatar_url TEXT,
+    color TEXT DEFAULT '#808080',  -- User's RGB color for visualization
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Projects table
+CREATE TABLE public.projects (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug TEXT UNIQUE NOT NULL,          -- URL-friendly identifier
+    name TEXT NOT NULL,                 -- Display name
+    description TEXT,
+    owner_id UUID REFERENCES public.profiles(id),
+    is_public BOOLEAN DEFAULT FALSE,    -- Accessible via /public/{slug}
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Project membership (which users can access which projects)
+CREATE TABLE public.project_members (
+    project_id UUID REFERENCES public.projects(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    role TEXT DEFAULT 'member',         -- 'owner', 'admin', 'member'
+    color TEXT,                         -- User's color in THIS project (RGB)
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (project_id, user_id)
+);
+
+-- Nodes table (equivalent to nodes/{uuid}.json)
+CREATE TABLE public.nodes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID REFERENCES public.projects(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    parent_id UUID REFERENCES public.nodes(id) ON DELETE SET NULL,
+    description TEXT DEFAULT '',
+    node_type TEXT DEFAULT 'default',
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- User votes (equivalent to data/{user}.json -> nodes)
+CREATE TABLE public.user_node_votes (
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    node_id UUID REFERENCES public.nodes(id) ON DELETE CASCADE,
+    interested BOOLEAN,                 -- TRUE=accept, FALSE=reject, NULL=pending
+    metadata TEXT DEFAULT '',           -- User's private notes
+    voted_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id, node_id)
+);
+
+-- Node types per project (equivalent to node_types/{type}/definition.json)
+CREATE TABLE public.node_types (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID REFERENCES public.projects(id) ON DELETE CASCADE,
+    type_name TEXT NOT NULL,            -- e.g., 'default', 'game_concept'
+    definition JSONB NOT NULL,          -- The full definition.json content
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (project_id, type_name)
+);
+
+-- Prompts per node type (equivalent to node_types/{type}/*.md files)
+CREATE TABLE public.prompts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    node_type_id UUID REFERENCES public.node_types(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,                 -- Prompt file name (without .md)
+    display_name TEXT NOT NULL,
+    description TEXT,
+    icon TEXT DEFAULT 'psychology',
+    produces_type TEXT,                 -- Which node_type this generates
+    body TEXT NOT NULL,                 -- The prompt template content
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for performance
+CREATE INDEX idx_nodes_project ON public.nodes(project_id);
+CREATE INDEX idx_nodes_parent ON public.nodes(parent_id);
+CREATE INDEX idx_votes_node ON public.user_node_votes(node_id);
+CREATE INDEX idx_votes_user ON public.user_node_votes(user_id);
+CREATE INDEX idx_projects_slug ON public.projects(slug);
+CREATE INDEX idx_projects_public ON public.projects(is_public) WHERE is_public = TRUE;
+```
+
+### 7.3 Row Level Security (RLS) Policies
+
+```sql
+-- Enable RLS on all tables
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.nodes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_node_votes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.node_types ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.prompts ENABLE ROW LEVEL SECURITY;
+
+-- Profiles: Users can read all, update only their own
+CREATE POLICY "Profiles are viewable by everyone" ON public.profiles
+    FOR SELECT USING (true);
+CREATE POLICY "Users can update own profile" ON public.profiles
+    FOR UPDATE USING (auth.uid() = id);
+
+-- Projects: Public projects readable by all, private by members only
+CREATE POLICY "Public projects are viewable by everyone" ON public.projects
+    FOR SELECT USING (is_public = TRUE);
+CREATE POLICY "Members can view their projects" ON public.projects
+    FOR SELECT USING (
+        id IN (SELECT project_id FROM public.project_members WHERE user_id = auth.uid())
+    );
+CREATE POLICY "Members can update their projects" ON public.projects
+    FOR UPDATE USING (
+        id IN (SELECT project_id FROM public.project_members WHERE user_id = auth.uid() AND role IN ('owner', 'admin'))
+    );
+CREATE POLICY "Authenticated users can create projects" ON public.projects
+    FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+-- Nodes: Readable if project is public OR user is member, writable by members only
+CREATE POLICY "Nodes readable on public projects" ON public.nodes
+    FOR SELECT USING (
+        project_id IN (SELECT id FROM public.projects WHERE is_public = TRUE)
+    );
+CREATE POLICY "Nodes readable by project members" ON public.nodes
+    FOR SELECT USING (
+        project_id IN (SELECT project_id FROM public.project_members WHERE user_id = auth.uid())
+    );
+CREATE POLICY "Nodes writable by project members" ON public.nodes
+    FOR ALL USING (
+        project_id IN (SELECT project_id FROM public.project_members WHERE user_id = auth.uid())
+    );
+
+-- Votes: Users can only manage their own votes
+CREATE POLICY "Users can view all votes on accessible nodes" ON public.user_node_votes
+    FOR SELECT USING (
+        node_id IN (
+            SELECT id FROM public.nodes WHERE project_id IN (
+                SELECT id FROM public.projects WHERE is_public = TRUE
+                UNION
+                SELECT project_id FROM public.project_members WHERE user_id = auth.uid()
+            )
+        )
+    );
+CREATE POLICY "Users can manage only their own votes" ON public.user_node_votes
+    FOR ALL USING (auth.uid() = user_id);
+
+-- Node types and prompts: Same access as nodes
+CREATE POLICY "Node types readable on accessible projects" ON public.node_types
+    FOR SELECT USING (
+        project_id IN (
+            SELECT id FROM public.projects WHERE is_public = TRUE
+            UNION
+            SELECT project_id FROM public.project_members WHERE user_id = auth.uid()
+        )
+    );
+CREATE POLICY "Node types writable by members" ON public.node_types
+    FOR ALL USING (
+        project_id IN (SELECT project_id FROM public.project_members WHERE user_id = auth.uid())
+    );
+
+CREATE POLICY "Prompts readable via node_type access" ON public.prompts
+    FOR SELECT USING (
+        node_type_id IN (SELECT id FROM public.node_types)  -- Inherits from node_types policy
+    );
+CREATE POLICY "Prompts writable via node_type access" ON public.prompts
+    FOR ALL USING (
+        node_type_id IN (
+            SELECT id FROM public.node_types WHERE project_id IN (
+                SELECT project_id FROM public.project_members WHERE user_id = auth.uid()
+            )
+        )
+    );
+```
+
+### 7.4 Real-Time Synchronization
+
+**Supabase Realtime Subscriptions:**
+```python
+# Subscribe to node changes for a project
+channel = supabase.channel(f'project:{project_id}')
+channel.on_postgres_changes(
+    event='*',
+    schema='public',
+    table='nodes',
+    filter=f'project_id=eq.{project_id}',
+    callback=on_node_change
+).on_postgres_changes(
+    event='*',
+    schema='public',
+    table='user_node_votes',
+    callback=on_vote_change
+).subscribe()
+```
+
+**Event Handling:**
+- `INSERT` on nodes → Add node to local graph, trigger UI refresh
+- `UPDATE` on nodes → Update node properties, re-render
+- `DELETE` on nodes → Remove from graph
+- `INSERT/UPDATE` on votes → Recalculate interested_users, update node color
+
+**Conflict Resolution:**
+- **Last-Write-Wins** for node properties (label, description)
+- **No conflicts** for votes (each user writes only their own row)
+- `updated_at` timestamp used for optimistic locking if needed
+
+### 7.5 Authentication System
+
+**Auth Flow:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Application Start                     │
+└─────────────────────────┬───────────────────────────────┘
+                          │
+                          ▼
+              ┌───────────────────────┐
+              │  Check Storage Backend │
+              │  for current project   │
+              └───────────┬───────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+   ┌─────────────┐                ┌─────────────────┐
+   │ Git Backend │                │ Supabase Backend │
+   └──────┬──────┘                └────────┬────────┘
+          │                                │
+          ▼                                ▼
+   ┌─────────────┐                ┌─────────────────┐
+   │ Show User   │                │ Check Session   │
+   │ Dropdown    │                │ (JWT Cookie)    │
+   │ (No Auth)   │                └────────┬────────┘
+   └─────────────┘                         │
+                               ┌───────────┴───────────┐
+                               ▼                       ▼
+                        ┌─────────────┐         ┌─────────────┐
+                        │ Logged In   │         │ Not Logged  │
+                        │ Show App    │         │ In          │
+                        └─────────────┘         └──────┬──────┘
+                                                       │
+                                            ┌──────────┴──────────┐
+                                            ▼                     ▼
+                                     ┌─────────────┐       ┌─────────────┐
+                                     │ Public URL? │       │ Private URL │
+                                     │ /public/*   │       │ /project/*  │
+                                     └──────┬──────┘       └──────┬──────┘
+                                            │                     │
+                                            ▼                     ▼
+                                     ┌─────────────┐       ┌─────────────┐
+                                     │ Read-Only   │       │ Redirect to │
+                                     │ View        │       │ /login      │
+                                     └─────────────┘       └─────────────┘
+```
+
+**NiceGUI Pages:**
+
+| Route | Auth Required | Purpose |
+|-------|---------------|---------|
+| `/` | No | Landing page / project selector |
+| `/login` | No | Email/password login form |
+| `/register` | No | New user registration |
+| `/logout` | Yes | Clear session, redirect to `/` |
+| `/project/{slug}` | Yes | Full editing access to project |
+| `/public/{slug}` | No | Read-only view of public project |
+| `/settings` | Yes | User profile settings |
+
+**Session Management:**
+- Supabase JWT stored in HTTP-only cookie
+- NiceGUI middleware checks session on protected routes
+- Auto-refresh tokens before expiry
+
+### 7.6 UI Adaptations by Backend
+
+The interface dynamically adapts based on the storage backend:
+
+**Header Controls:**
+
+| Component | Git Backend | Supabase Backend |
+|-----------|-------------|------------------|
+| User Identity | Dropdown selector (local users) | Logged-in user display + logout button |
+| Sync Button | "Pull" / "Push" buttons | Hidden (real-time sync) |
+| Sync Status | "Last pulled: 5m ago" | "Live" indicator (green dot) |
+| Project Sharing | "Copy git URL" | "Share link" + visibility toggle |
+
+**Project Creation Dialog:**
+
+| Field | Git Backend | Supabase Backend |
+|-------|-------------|------------------|
+| Project Name | ✓ | ✓ |
+| Initial Username | ✓ (creates local file) | ✗ (uses logged-in user) |
+| Root Node | ✓ | ✓ |
+| Git Remote URL | Optional | ✗ |
+| Make Public | ✗ | ✓ (checkbox) |
+| Invite Members | ✗ | ✓ (email input) |
+
+**Node Editing Panel:**
+
+| Feature | Git Backend | Supabase Backend (Read-Only) | Supabase Backend (Member) |
+|---------|-------------|------------------------------|---------------------------|
+| Edit Label | ✓ | ✗ | ✓ |
+| Edit Description | ✓ | ✗ | ✓ |
+| Vote (Accept/Reject) | ✓ | ✗ | ✓ |
+| Drill Down | ✓ | ✗ | ✓ |
+| Delete Node | ✓ | ✗ | ✓ |
+| Login Prompt | ✗ | ✓ "Login to contribute" | ✗ |
+
+**Visual Indicators:**
+
+| Indicator | Git Backend | Supabase Backend |
+|-----------|-------------|------------------|
+| Unsaved Changes | Yellow dot | N/A (auto-save) |
+| Sync Pending | "Push to team?" prompt | N/A (real-time) |
+| Other Users Active | Not shown | Colored cursors on canvas (future) |
+| Connection Status | Git remote status | WebSocket status (connected/reconnecting) |
+
+### 7.7 Public Project Access
+
+**URL Structure:**
+```
+https://your-domain.com/public/{project-slug}
+```
+
+**Read-Only Mode Features:**
+- Full graph visualization with zoom/pan
+- Node selection shows details (label, description, interested users)
+- Color-coded consensus visualization
+- **No** editing capabilities
+- **No** voting capabilities
+- Prominent "Login to contribute" call-to-action
+
+**Login-to-Edit Flow:**
+1. Anonymous user views `/public/my-project`
+2. Clicks "Login to contribute"
+3. Redirected to `/login?redirect=/project/my-project`
+4. After login, redirected to `/project/my-project` with full access
+5. If not already a member, prompted to "Request access" or auto-joined if project allows
+
+### 7.8 Implementation Phases
+
+**Phase 1: Storage Backend Abstraction (Foundation)**
+- [ ] Define `StorageBackend` protocol in `src/storage/protocol.py`
+- [ ] Create `GitBackend` class extracting current `DataManager` logic
+- [ ] Create `BackendFactory` to instantiate correct backend from config
+- [ ] Refactor `DataManager` to delegate to backend instance
+- [ ] Add `config.json` support per project
+- [ ] Update `ProjectManager` to handle backend selection
+
+**Files to create:**
+```
+src/
+  storage/
+    __init__.py
+    protocol.py         # StorageBackend Protocol definition
+    git_backend.py      # Current logic extracted
+    supabase_backend.py # New Supabase implementation
+    factory.py          # Backend instantiation
+```
+
+**Phase 2: Supabase Backend Implementation**
+- [ ] Add `supabase-py` to requirements.txt
+- [ ] Implement `SupabaseBackend` class
+- [ ] Implement node CRUD operations via Supabase API
+- [ ] Implement user vote operations
+- [ ] Implement node type and prompt sync
+- [ ] Add connection pooling and error handling
+
+**Phase 3: Authentication System**
+- [ ] Create `/login` page with email/password form
+- [ ] Create `/register` page
+- [ ] Implement session middleware for protected routes
+- [ ] Add logout functionality
+- [ ] Update header to show logged-in user
+- [ ] Add "Login to contribute" prompts for public views
+
+**Files to create:**
+```
+src/
+  auth/
+    __init__.py
+    middleware.py       # Session checking
+    pages.py            # Login/register UI
+    session.py          # JWT/cookie management
+```
+
+**Phase 4: Real-Time Sync**
+- [ ] Implement Supabase Realtime subscription manager
+- [ ] Handle INSERT/UPDATE/DELETE events for nodes
+- [ ] Handle vote change events
+- [ ] Implement optimistic UI updates
+- [ ] Add reconnection logic for dropped WebSocket
+- [ ] Add "Live" status indicator in header
+
+**Phase 5: Public Project Routes**
+- [ ] Create `/public/{slug}` route
+- [ ] Implement read-only graph view
+- [ ] Disable all edit controls in read-only mode
+- [ ] Add "Login to contribute" CTA
+- [ ] Implement login redirect flow with return URL
+
+**Phase 6: UI Adaptation Layer**
+- [ ] Create `UIContext` class with backend-aware feature flags
+- [ ] Conditionally render sync buttons (git only)
+- [ ] Conditionally render user dropdown vs login status
+- [ ] Update project creation modal with backend-specific fields
+- [ ] Add project visibility toggle for Supabase projects
+
+**Phase 7: Migration & Testing**
+- [ ] Create migration tool: local project → Supabase
+- [ ] Create export tool: Supabase project → local files
+- [ ] Write unit tests for both backends
+- [ ] Write integration tests for auth flow
+- [ ] Write E2E tests for public project access
+- [ ] Performance testing with large graphs
+
+### 7.9 Environment Configuration
+
+**New Environment Variables (`.env`):**
+```bash
+# Supabase Configuration (optional, for cloud projects)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...  # For admin operations
+
+# Auth Settings
+SESSION_SECRET=your-random-secret-key
+SESSION_EXPIRY_HOURS=168  # 7 days
+
+# Feature Flags
+ENABLE_SUPABASE=true
+ENABLE_PUBLIC_PROJECTS=true
+```
+
+### 7.10 Error Handling & Offline Support
+
+**Network Failure Handling:**
+- Queue failed operations locally
+- Retry with exponential backoff
+- Show "Offline" indicator in header
+- Prevent destructive actions while offline
+
+**Conflict Detection:**
+- Compare `updated_at` before writes
+- If conflict detected, show diff UI
+- Allow user to choose: "Keep mine" / "Keep theirs" / "Merge"
+
+**Graceful Degradation:**
+- If Supabase unreachable, show cached data
+- Disable write operations until reconnected
+- Log all errors for debugging
