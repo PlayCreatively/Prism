@@ -87,7 +87,8 @@ def create_project(
     initial_username: str,
     root_node_label: str,
     root_node_description: str = "",
-    init_git: bool = True
+    init_git: bool = True,
+    backend: str = "git"
 ) -> Dict[str, Any]:
     """
     Create a new project with the required folder structure.
@@ -97,7 +98,8 @@ def create_project(
         initial_username: First user to create
         root_node_label: Label for the root node
         root_node_description: Optional description for the root node
-        init_git: Whether to initialize a git repository
+        init_git: Whether to initialize a git repository (only for git backend)
+        backend: Storage backend type - "git" or "supabase"
         
     Returns:
         Dict with 'success' (bool), 'message' (str), and optionally 'project_path'
@@ -130,6 +132,10 @@ def create_project(
     
     root_node_label = root_node_label.strip()
     
+    # Validate backend
+    if backend not in ('git', 'supabase'):
+        return {'success': False, 'message': f'Invalid backend: {backend}. Use "git" or "supabase"'}
+    
     try:
         # Create project structure
         data_dir = project_path / "data"
@@ -140,8 +146,15 @@ def create_project(
         nodes_dir.mkdir(parents=True, exist_ok=True)
         node_types_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize git repository if requested
-        if init_git:
+        # Create config.json with backend type
+        config_path = project_path / "config.json"
+        import json
+        config = {"backend": backend}
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        
+        # Initialize git repository if requested and using git backend
+        if init_git and backend == "git":
             try:
                 subprocess.run(
                     ['git', 'init'],
@@ -174,13 +187,15 @@ def create_project(
             description=root_node_description
         )
         
-        logger.info(f"Created project '{project_name}' with user '{initial_username}' and root node '{root_node_label}'")
+        backend_label = "Cloud (Supabase)" if backend == "supabase" else "Local (Git)"
+        logger.info(f"Created project '{project_name}' with {backend_label} backend, user '{initial_username}' and root node '{root_node_label}'")
         
         return {
             'success': True,
-            'message': f'Project "{project_name}" created successfully',
+            'message': f'Project "{project_name}" created successfully with {backend_label} storage',
             'project_path': str(project_path),
-            'root_node_id': root_node.get('id')
+            'root_node_id': root_node.get('id'),
+            'backend': backend
         }
         
     except Exception as e:

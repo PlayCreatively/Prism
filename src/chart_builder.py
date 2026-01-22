@@ -50,6 +50,9 @@ def build_echart_options(
             }]
         }
     
+    # Background color for chart and label text borders (dark slate)
+    background_color = '#1e293b'
+    
     nodes = graph.get('nodes', [])
     edges = graph.get('edges', [])
     active_user = (active_user or '').strip()

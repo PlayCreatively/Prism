@@ -770,15 +770,15 @@ https://your-domain.com/public/{project-slug}
 
 ### 7.8 Implementation Phases
 
-**Phase 1: Storage Backend Abstraction (Foundation)**
-- [ ] Define `StorageBackend` protocol in `src/storage/protocol.py`
-- [ ] Create `GitBackend` class extracting current `DataManager` logic
-- [ ] Create `BackendFactory` to instantiate correct backend from config
-- [ ] Refactor `DataManager` to delegate to backend instance
-- [ ] Add `config.json` support per project
-- [ ] Update `ProjectManager` to handle backend selection
+**Phase 1: Storage Backend Abstraction (Foundation)** ✅ COMPLETE
+- [x] Define `StorageBackend` protocol in `src/storage/protocol.py`
+- [x] Create `GitBackend` class extracting current `DataManager` logic
+- [x] Create `BackendFactory` to instantiate correct backend from config
+- [x] Refactor `DataManager` to delegate to backend instance
+- [x] Add `config.json` support per project
+- [x] Update `ProjectManager` to handle backend selection
 
-**Files to create:**
+**Files created:**
 ```
 src/
   storage/
@@ -789,23 +789,23 @@ src/
     factory.py          # Backend instantiation
 ```
 
-**Phase 2: Supabase Backend Implementation**
-- [ ] Add `supabase-py` to requirements.txt
-- [ ] Implement `SupabaseBackend` class
-- [ ] Implement node CRUD operations via Supabase API
-- [ ] Implement user vote operations
-- [ ] Implement node type and prompt sync
-- [ ] Add connection pooling and error handling
+**Phase 2: Supabase Backend Implementation** ✅ COMPLETE
+- [x] Add `supabase-py` to requirements.txt
+- [x] Implement `SupabaseBackend` class
+- [x] Implement node CRUD operations via Supabase API
+- [x] Implement user vote operations
+- [x] Implement node type and prompt sync
+- [x] Add connection pooling and error handling
 
-**Phase 3: Authentication System**
-- [ ] Create `/login` page with email/password form
-- [ ] Create `/register` page
-- [ ] Implement session middleware for protected routes
-- [ ] Add logout functionality
-- [ ] Update header to show logged-in user
-- [ ] Add "Login to contribute" prompts for public views
+**Phase 3: Authentication System** ✅ COMPLETE
+- [x] Create `/login` page with email/password form
+- [x] Create `/register` page
+- [x] Implement session middleware for protected routes
+- [x] Add logout functionality
+- [x] Update header to show logged-in user
+- [x] Add "Login to contribute" prompts for public views
 
-**Files to create:**
+**Files created:**
 ```
 src/
   auth/
@@ -815,35 +815,65 @@ src/
     session.py          # JWT/cookie management
 ```
 
-**Phase 4: Real-Time Sync**
-- [ ] Implement Supabase Realtime subscription manager
-- [ ] Handle INSERT/UPDATE/DELETE events for nodes
-- [ ] Handle vote change events
-- [ ] Implement optimistic UI updates
-- [ ] Add reconnection logic for dropped WebSocket
-- [ ] Add "Live" status indicator in header
+**Phase 4: Real-Time Sync** ✅ COMPLETE
+- [x] Implement Supabase Realtime subscription manager
+- [x] Handle INSERT/UPDATE/DELETE events for nodes
+- [x] Handle vote change events
+- [x] Implement optimistic UI updates
+- [x] Add reconnection logic for dropped WebSocket
+- [x] Add "Live" status indicator in header
 
-**Phase 5: Public Project Routes**
-- [ ] Create `/public/{slug}` route
-- [ ] Implement read-only graph view
-- [ ] Disable all edit controls in read-only mode
-- [ ] Add "Login to contribute" CTA
-- [ ] Implement login redirect flow with return URL
+**Files created:**
+```
+src/
+  realtime_sync.py      # RealtimeSyncManager and NiceGUI adapter
+```
 
-**Phase 6: UI Adaptation Layer**
-- [ ] Create `UIContext` class with backend-aware feature flags
-- [ ] Conditionally render sync buttons (git only)
-- [ ] Conditionally render user dropdown vs login status
-- [ ] Update project creation modal with backend-specific fields
-- [ ] Add project visibility toggle for Supabase projects
+**Phase 5: Public Project Routes** ✅ COMPLETE
+- [x] Create `/public/{slug}` route
+- [x] Implement read-only graph view
+- [x] Disable all edit controls in read-only mode
+- [x] Add "Login to contribute" CTA
+- [x] Implement login redirect flow with return URL
 
-**Phase 7: Migration & Testing**
-- [ ] Create migration tool: local project → Supabase
-- [ ] Create export tool: Supabase project → local files
-- [ ] Write unit tests for both backends
-- [ ] Write integration tests for auth flow
-- [ ] Write E2E tests for public project access
-- [ ] Performance testing with large graphs
+**Files created:**
+```
+src/
+  public_routes.py      # PublicProjectView and route handlers
+```
+
+**Phase 6: UI Adaptation Layer** ✅ COMPLETE
+- [x] Create `UIContext` class with backend-aware feature flags
+- [x] Conditionally render sync buttons (git only)
+- [x] Conditionally render user dropdown vs login status
+- [x] Update project creation modal with backend-specific fields
+- [x] Add project visibility toggle for Supabase projects
+
+**Files created:**
+```
+src/
+  ui_adapter.py         # UIContext, AdaptiveHeader, AdaptiveNodePanel
+```
+
+**Phase 7: Migration & Testing** ✅ COMPLETE
+- [x] Create migration tool: local project → Supabase
+- [x] Create export tool: Supabase project → local files
+- [x] Write unit tests for both backends
+- [x] Write integration tests for auth flow
+- [x] Write E2E tests for public project access
+- [ ] Performance testing with large graphs (manual testing recommended)
+
+**Files created:**
+```
+src/
+  migration.py          # GitToSupabaseMigrator, SupabaseToGitMigrator
+
+tests/
+  test_storage_backends.py  # GitBackend and SupabaseBackend tests
+  test_auth.py              # Authentication flow tests
+  test_public_routes.py     # Public route and read-only tests
+  test_migration.py         # Migration tool tests
+```
 
 ### 7.9 Environment Configuration
 

@@ -62,6 +62,15 @@ from src.drill_engine import DrillEngine
 from src.node_type_manager import get_node_type_manager
 from src.custom_fields import render_custom_fields
 from src.components import render_markdown_textarea, render_prompt_edit_modal
+from src.storage.factory import create_backend, get_backend_type
+from src.project_manager import get_project_path
+
+try:
+    from src.auth.session import SessionManager
+    SESSION_MANAGER = SessionManager()
+except ImportError:
+    print("Warning: SessionManager could not be imported. Auth disabled.")
+    SESSION_MANAGER = None
 
 try:
     from src.ai_agent import AIAgent
@@ -124,6 +133,15 @@ if not ensure_api_key_in_env():
 # AI Agent is global (stateless) - initialized after API key is potentially loaded
 ai_agent = AIAgent()
 
+
+# --- Project Name/Slug Helpers ---
+def project_name_to_slug(name: str) -> str:
+    """Convert project display name to URL-safe slug (spaces -> underscores)."""
+    return name.replace(' ', '_')
+
+def slug_to_display_name(slug: str) -> str:
+    """Convert URL slug to display name (underscores -> spaces)."""
+    return slug.replace('_', ' ')
 
 
 # Helper to show API key setup dialog
@@ -189,6 +207,9 @@ def show_api_key_dialog(on_complete=None, is_required=False):
 # Helper to show create project dialog
 def show_create_project_dialog(on_created=None, is_first_project=False):
     """Show modal dialog to create a new project."""
+    import os
+    supabase_available = os.environ.get('ENABLE_SUPABASE', '').lower() == 'true'
+    
     with ui.dialog() as dialog, ui.card().classes('w-96'):
         if is_first_project:
             ui.label('Welcome to PRISM!').classes('text-xl font-bold text-primary')
@@ -197,6 +218,16 @@ def show_create_project_dialog(on_created=None, is_first_project=False):
             ui.label('Create New Project').classes('text-lg font-bold')
         
         project_name_input = ui.input('Project Name', placeholder='e.g., Research-Collab').classes('w-full')
+        
+        # Backend selection (only show if Supabase is configured)
+        backend_select = None
+        if supabase_available:
+            backend_select = ui.select(
+                label='Storage Backend',
+                options={'git': 'Local (Git)', 'supabase': 'Cloud (Supabase)'},
+                value='git'
+            ).classes('w-full')
+        
         username_input = ui.input('Your Username', placeholder='e.g., Alex').classes('w-full')
         root_label_input = ui.input('Root Node Label', placeholder='e.g., Main Thesis').classes('w-full')
         root_desc_input = ui.textarea('Root Node Description (optional)').classes('w-full').props('outlined rows=2')
@@ -204,11 +235,13 @@ def show_create_project_dialog(on_created=None, is_first_project=False):
         error_label = ui.label('').classes('text-red-500 text-sm')
         
         def do_create():
+            backend = backend_select.value if backend_select else 'git'
             result = create_project(
                 project_name=project_name_input.value,
                 initial_username=username_input.value,
                 root_node_label=root_label_input.value,
-                root_node_description=root_desc_input.value or ""
+                root_node_description=root_desc_input.value or "",
+                backend=backend
             )
             if result['success']:
                 ui.notify(result['message'], type='positive')
@@ -292,6 +325,17 @@ def main_page():
     # If no valid project, use first available or None
     current_project = stored_project or (available_projects[0] if available_projects else None)
     
+    # If we have a project and we're on the root URL, redirect to /project/{slug}
+    # This ensures the URL always reflects the current project
+    # Note: When called from cloud_project_page, we don't want to redirect
+    if current_project and not app.storage.user.get('_skip_redirect'):
+        slug = project_name_to_slug(current_project)
+        ui.navigate.to(f'/project/{slug}')
+        return
+    
+    # Clear the skip flag if it was set
+    app.storage.user.pop('_skip_redirect', None)
+    
     # Handle case where no projects exist - show welcome screen
     if not current_project:
         with ui.column().classes('fixed inset-0 flex items-center justify-center bg-slate-900'):
@@ -303,7 +347,8 @@ def main_page():
                 
                 def handle_project_created(project_name):
                     app.storage.user['active_project'] = project_name
-                    ui.navigate.to('/')  # Reload page
+                    slug = project_name_to_slug(project_name)
+                    ui.navigate.to(f'/project/{slug}')
                 
                 ui.button('Create First Project', on_click=lambda: show_create_project_dialog(
                     on_created=handle_project_created,
@@ -315,9 +360,37 @@ def main_page():
     project_data_dir = get_project_data_dir(current_project)
     project_git_path = get_project_git_path(current_project)
     project_node_types_dir = get_project_node_types_dir(current_project)
+    project_path = get_project_path(current_project)
     
-    # Initialize project-specific managers
-    data_manager = DataManager(data_dir=project_data_dir)
+    # Determine backend type from config.json
+    backend_type = get_backend_type(project_path)
+    is_supabase = backend_type == 'supabase'
+    
+    # Create appropriate backend and DataManager
+    try:
+        backend = create_backend(project_path, auth_provider=SESSION_MANAGER)
+        if is_supabase:
+            # Debug: Check if user is authenticated
+            current_user = SESSION_MANAGER.get_current_user() if SESSION_MANAGER else None
+            print(f"[{current_project}] Supabase backend - authenticated: {backend.is_authenticated}, read_only: {backend.is_read_only}, user: {current_user}")
+            
+            # Auto-join public projects if authenticated
+            if backend.is_authenticated:
+                joined = backend.ensure_project_membership()
+                if joined:
+                    print(f"[{current_project}] User is now a project member")
+                    ui.notify(f"Welcome {current_user.get('username')}", type='positive')
+                else:
+                    print(f"[{current_project}] Failed to join project - check if profile exists")
+                    ui.notify('Could not join project. You may need to be invited.', type='warning')
+        data_manager = DataManager(data_dir=project_data_dir, backend=backend)
+        print(f"[{current_project}] Using {backend_type} backend")
+    except Exception as e:
+        print(f"[{current_project}] Backend error: {e}, falling back to git")
+        data_manager = DataManager(data_dir=project_data_dir)
+        backend_type = 'git'
+        is_supabase = False
+    
     drill_engine = DrillEngine(users=get_all_users(project_data_dir))
     
     # Initialize data for the project
@@ -337,10 +410,35 @@ def main_page():
     # --- State & Closures ---
     
     # Determine default active user dynamically (for this project)
+    # For Supabase projects, use the authenticated user's ID
+    # For local projects, use the file-based user list
     all_users_list = get_all_users(project_data_dir)
-    stored_user = app.storage.user.get('active_user')
-    # Validate stored user still exists in this project, otherwise pick first available
-    default_active_user = stored_user if stored_user in all_users_list else (all_users_list[0] if all_users_list else None)
+    
+    # For Supabase, build user mapping (id -> username) for display
+    supabase_user_map = {}  # Maps user_id -> display_name
+    supabase_user_display_name = None
+    
+    if is_supabase and SESSION_MANAGER:
+        supabase_user = SESSION_MANAGER.get_current_user()
+        if supabase_user:
+            # Use Supabase user ID as the active user
+            default_active_user = supabase_user.get('id')
+            supabase_user_display_name = supabase_user.get('username') or supabase_user.get('email', 'User')
+            print(f"[{current_project}] Using Supabase user as active_user: {default_active_user} ({supabase_user_display_name})")
+            
+            # Load project members for user mapping
+            if hasattr(backend, 'get_project_members'):
+                members = backend.get_project_members()
+                for m in members:
+                    supabase_user_map[m['id']] = m['username'] or m['id'][:8]
+                print(f"[{current_project}] Loaded {len(supabase_user_map)} project members")
+        else:
+            default_active_user = None
+            print(f"[{current_project}] No Supabase user logged in")
+    else:
+        stored_user = app.storage.user.get('active_user')
+        # Validate stored user still exists in this project, otherwise pick first available
+        default_active_user = stored_user if stored_user in all_users_list else (all_users_list[0] if all_users_list else None)
     
     # We use a container for mutable state to be accessible in closures
     state = {
@@ -349,6 +447,8 @@ def main_page():
         'details_container': None,
         'last_graph_hash': 0,
         'active_user': default_active_user,
+        'active_user_display': supabase_user_display_name if is_supabase else default_active_user,
+        'user_map': supabase_user_map,  # For Supabase: id -> display name
         'active_project': current_project,
         'project_node_types_dir': project_node_types_dir,
         'show_dead': app.storage.user.get('show_dead', False),
@@ -359,14 +459,16 @@ def main_page():
         'dragging_node_id': None,
         'edit_controller': EditController(),
         'edit_overlay': EditOverlay(),
-        'edit_actions': EditActions(data_manager)
+        'edit_actions': EditActions(data_manager),
+        'backend_type': backend_type,
+        'is_supabase': is_supabase
     }
 
-    # --- Git State & Logic ---
+    # --- Git State & Logic (only for git backend) ---
     git_btn_ref = {}
     
-    # Create git_manager for this project's repository
-    git_manager = GitManager(repo_path=project_git_path) if GitManager else None
+    # Create git_manager for this project's repository (only for git backend)
+    git_manager = GitManager(repo_path=project_git_path) if (GitManager and not is_supabase) else None
 
     async def check_git_status():
         if not git_manager: return
@@ -576,9 +678,14 @@ def main_page():
                 pass
 
     # Auto-refresh loop
-    def auto_refresh_check():
+    # For Supabase, the backend now has caching so we don't need aggressive polling
+    async def auto_refresh_check():
         try:
-            g = data_manager.get_graph()
+            if is_supabase:
+                # For Supabase, run network call in background to not block UI
+                g = await run.io_bound(data_manager.get_graph)
+            else:
+                g = data_manager.get_graph()
             current_len = len(g.get('nodes', [])) + len(g.get('edges', []))
             # Just a heuristic to avoid spamming the frontend if idle
             if current_len != state['last_graph_hash']:
@@ -587,8 +694,9 @@ def main_page():
         except Exception:
             pass
 
-    # Start the timer immediately after definition to ensure scope visibility
-    ui.timer(2.0, auto_refresh_check)
+    # Start the timer - less aggressive for Supabase (caching handles frequent calls)
+    refresh_interval = 5.0 if is_supabase else 2.0
+    ui.timer(refresh_interval, auto_refresh_check)
 
     # --- Actions ---
 
@@ -664,14 +772,17 @@ def main_page():
             ui.notify('No active user selected', type='warning')
             return
         try:
+            # Get display name for active user (UUID for Supabase, username for Git)
+            active_user_display = state.get('active_user_display', user)
+            
             if status == 'maybe':
                 # Set interested to None (pending) but preserve metadata
                 data_manager.update_user_node(user, node_id, interested=None)
-                ui.notify(f"{user} reset vote (Maybe)", type='info')
+                ui.notify(f"{active_user_display} reset vote (Maybe)", type='info')
             else:
                 interested = (status == 'accepted')
                 data_manager.update_user_node(user, node_id, interested=interested)
-                ui.notify(f"{user} voted {status.upper()}", type='positive' if interested else 'negative')
+                ui.notify(f"{active_user_display} voted {status.upper()}", type='positive' if interested else 'negative')
             
             # Trigger git status check
             ui.timer(0.5, check_git_status, once=True)
@@ -840,14 +951,24 @@ def main_page():
                 with ui.row().classes('gap-1 flex-wrap'):
                     interested_set = set(generic_node.get('interested_users', []))
                     rejected_set = set(generic_node.get('rejected_users', []))
+                    hidden_u = get_hidden_users()
                     
-                    # Get all users and their dynamic colors
-                    all_users = get_all_users(project_data_dir)
-                    visible_users = get_visible_users(project_data_dir)
+                    # Get all users - use project members for Supabase, local files otherwise
+                    if is_supabase:
+                        # For Supabase, use the user_map from state (username-based)
+                        user_map = state.get('user_map', {})
+                        # Get display names from user map (values are usernames)
+                        all_users = list(user_map.values()) if user_map else []
+                        # Filter out hidden users
+                        visible_users = [u for u in all_users if u not in hidden_u]
+                    else:
+                        all_users = get_all_users(project_data_dir)
+                        visible_users = get_visible_users(project_data_dir)
 
                     for user in all_users:
-                        # Get user's dynamic color
-                        user_color = get_user_color(user, visible_users, project_data_dir)
+                        # Get user's dynamic color (based on visible users only)
+                        is_hidden = user in hidden_u
+                        user_color = '#808080' if is_hidden else get_user_color(user, visible_users, project_data_dir)
                         
                         if user in interested_set:
                             with ui.chip(icon='check', color='green').props('outline size=sm'):
@@ -933,20 +1054,27 @@ def main_page():
                 nonlocal current_metadata
                 current_metadata = val
                 schedule_save()
+            
+            # Get display name for active user (UUID for Supabase, username for Git)
+            active_user_display = state.get('active_user_display', active_user)
 
             render_editable_notes(
                 text=display_metadata,
                 on_change=update_metadata,
-                label=f'{active_user}\'s notes',
+                label=f'{active_user_display}\'s notes',
                 editable=True
             )
             
             # Show other users' notes with accept/reject coloring
+            # For Supabase, pass user_map to resolve UUIDs to display names
+            user_map = state.get('user_map', {}) if is_supabase else {}
             render_other_users_notes(
                 node_id=node_id,
                 active_user=active_user,
                 data_manager=data_manager,
-                users=all_users_list
+                users=all_users_list,
+                user_map=user_map,
+                is_supabase=is_supabase
             )
             
             save_status = ui.label('').classes('text-xs text-green-500 italic mt-1')
@@ -1163,14 +1291,16 @@ def main_page():
                 # Show create project dialog
                 def on_project_created(new_project):
                     app.storage.user['active_project'] = new_project
-                    ui.navigate.to('/')  # Reload page
+                    slug = project_name_to_slug(new_project)
+                    ui.navigate.to(f'/project/{slug}')
                 show_create_project_dialog(on_created=on_project_created, is_first_project=False)
             else:
                 app.storage.user['active_project'] = project_name
-                ui.navigate.to('/')  # Reload page to switch project
+                slug = project_name_to_slug(project_name)
+                ui.navigate.to(f'/project/{slug}')
         
-        # Build project options
-        project_options = {p: p for p in available_projects}
+        # Build project options: folder name -> display name (with spaces)
+        project_options = {p: slug_to_display_name(p) for p in available_projects}
         
         project_select = ui.select(
             project_options,
@@ -1183,55 +1313,198 @@ def main_page():
         
         ui.separator().props('vertical')
         
-        # --- User Selector ---
-        # "Acting as User" dropdown - dynamically populated
-        all_users = get_all_users(project_data_dir)
-        default_user = state['active_user'] if state['active_user'] in all_users else (all_users[0] if all_users else None)
-        if default_user and default_user != state['active_user']:
-            state['active_user'] = default_user
-            app.storage.user['active_user'] = default_user
-        
-        user_select = ui.select(
-            all_users,
-            value=state['active_user'],
-            label='Acting as User'
-        ).props('dense outlined').classes('w-32')
-        user_select.on('update:model-value', lambda e: set_active_user(user_select.value))
-        
-        # Add User button
-        def show_add_user_dialog():
-            with ui.dialog() as dialog, ui.card().classes('w-80'):
-                ui.label('Add User to Project').classes('text-lg font-bold')
-                username_input = ui.input('Username', placeholder='e.g., NewUser').classes('w-full')
-                error_label = ui.label('').classes('text-red-500 text-sm')
+        # --- User Selector (Git backend only) ---
+        if not is_supabase:
+            # "Acting as User" dropdown - dynamically populated (local users)
+            all_users = get_all_users(project_data_dir)
+            default_user = state['active_user'] if state['active_user'] in all_users else (all_users[0] if all_users else None)
+            if default_user and default_user != state['active_user']:
+                state['active_user'] = default_user
+                app.storage.user['active_user'] = default_user
+            
+            user_select = ui.select(
+                all_users,
+                value=state['active_user'],
+                label='Acting as User'
+            ).props('dense outlined').classes('w-32')
+            user_select.on('update:model-value', lambda e: set_active_user(user_select.value))
+            
+            # Add User button
+            def show_add_user_dialog():
+                with ui.dialog() as dialog, ui.card().classes('w-80'):
+                    ui.label('Add User to Project').classes('text-lg font-bold')
+                    username_input = ui.input('Username', placeholder='e.g., NewUser').classes('w-full')
+                    error_label = ui.label('').classes('text-red-500 text-sm')
+                    
+                    def do_add_user():
+                        result = add_user_to_project(current_project, username_input.value)
+                        if result['success']:
+                            ui.notify(result['message'], type='positive')
+                            dialog.close()
+                            ui.navigate.to('/')  # Reload to show new user
+                        else:
+                            error_label.text = result['message']
+                    
+                    with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                        ui.button('Cancel', on_click=dialog.close).props('flat')
+                        ui.button('Add User', on_click=do_add_user).props('color=primary')
+                dialog.open()
+            
+            ui.button(icon='person_add', on_click=show_add_user_dialog).props('flat dense round color=primary').tooltip('Add User to Project')
+        else:
+            # Supabase backend - show login status instead
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('cloud').classes('text-primary')
+                ui.label('Cloud Project').classes('text-sm text-gray-400')
                 
-                def do_add_user():
-                    result = add_user_to_project(current_project, username_input.value)
-                    if result['success']:
-                        ui.notify(result['message'], type='positive')
-                        dialog.close()
-                        ui.navigate.to('/')  # Reload to show new user
-                    else:
-                        error_label.text = result['message']
+                # Check if user is logged in
+                def get_current_user():
+                    if SESSION_MANAGER and SESSION_MANAGER.is_available:
+                        return SESSION_MANAGER.get_current_user()
+                    return None
                 
-                with ui.row().classes('w-full justify-end gap-2 mt-4'):
-                    ui.button('Cancel', on_click=dialog.close).props('flat')
-                    ui.button('Add User', on_click=do_add_user).props('color=primary')
-            dialog.open()
+                current_user = get_current_user()
+                
+                if current_user:
+                    # Show logged-in user
+                    ui.label(current_user.get('username', current_user.get('email', 'User'))).classes('text-sm text-primary')
+                    
+                    async def do_logout():
+                        if SESSION_MANAGER:
+                            SESSION_MANAGER.logout()
+                            ui.notify('Logged out', type='positive')
+                            ui.navigate.reload()
+                    
+                    ui.button('Logout', on_click=do_logout).props('flat dense color=secondary')
+                else:
+                    # Pre-create register dialog
+                    with ui.dialog() as register_dialog, ui.card().classes('w-96'):
+                        ui.label('Create Account').classes('text-lg font-bold mb-4')
+                        
+                        reg_username_input = ui.input('Username').classes('w-full')
+                        reg_email_input = ui.input('Email').classes('w-full').props('type=email')
+                        reg_password_input = ui.input('Password').classes('w-full').props('type=password')
+                        reg_confirm_input = ui.input('Confirm Password').classes('w-full').props('type=password')
+                        reg_error_label = ui.label('').classes('text-red-500 text-sm')
+                        
+                        def do_register():
+                            print("[AUTH] do_register called")
+                            username = reg_username_input.value.strip()
+                            email = reg_email_input.value.strip()
+                            password = reg_password_input.value
+                            confirm = reg_confirm_input.value
+                            
+                            if not username or not email or not password:
+                                reg_error_label.text = 'All fields required'
+                                return
+                            
+                            if password != confirm:
+                                reg_error_label.text = 'Passwords do not match'
+                                return
+                            
+                            if len(password) < 6:
+                                reg_error_label.text = 'Password must be at least 6 characters'
+                                return
+                            
+                            result = SESSION_MANAGER.register(email, password, username)
+                            print(f"[AUTH] register result: {result}")
+                            
+                            if result['success']:
+                                register_dialog.close()
+                                ui.notify('Account created! Check your email to confirm before logging in.', type='positive')
+                            else:
+                                reg_error_label.text = result.get('error', 'Registration failed')
+                        
+                        with ui.row().classes('w-full justify-end gap-2 mt-4'):
+                            ui.button('Cancel', on_click=register_dialog.close).props('flat')
+                            ui.button('Register', on_click=do_register).props('color=primary')
+                    
+                    # Pre-create login dialog
+                    with ui.dialog() as login_dialog, ui.card().classes('w-96'):
+                        ui.label('Login to Cloud Project').classes('text-lg font-bold mb-4')
+                        
+                        login_email_input = ui.input('Email').classes('w-full').props('type=email')
+                        login_password_input = ui.input('Password').classes('w-full').props('type=password')
+                        login_error_label = ui.label('').classes('text-red-500 text-sm')
+                        
+                        def do_login():
+                            print("[AUTH] do_login called")
+                            email = login_email_input.value.strip()
+                            password = login_password_input.value
+                            
+                            if not email or not password:
+                                login_error_label.text = 'Email and password required'
+                                return
+                            
+                            result = SESSION_MANAGER.login(email, password)
+                            print(f"[AUTH] login result: {result}")
+                            
+                            if result['success']:
+                                login_dialog.close()
+                                ui.notify(f"Welcome, {result['user'].get('username', email)}!", type='positive')
+                                ui.navigate.reload()
+                            else:
+                                login_error_label.text = result.get('error', 'Login failed')
+                        
+                        def show_register():
+                            print("[AUTH] show_register clicked")
+                            login_dialog.close()
+                            # Clear previous inputs
+                            reg_username_input.value = ''
+                            reg_email_input.value = ''
+                            reg_password_input.value = ''
+                            reg_confirm_input.value = ''
+                            reg_error_label.text = ''
+                            register_dialog.open()
+                        
+                        with ui.row().classes('w-full justify-between mt-4'):
+                            ui.button('Register', on_click=show_register).props('flat color=secondary')
+                            with ui.row().classes('gap-2'):
+                                ui.button('Cancel', on_click=login_dialog.close).props('flat')
+                                ui.button('Login', on_click=do_login).props('color=primary')
+                    
+                    def open_login():
+                        print("[AUTH] open_login called")
+                        if not SESSION_MANAGER or not SESSION_MANAGER.is_available:
+                            ui.notify('Supabase auth not configured', type='warning')
+                            return
+                        # Clear previous inputs
+                        login_email_input.value = ''
+                        login_password_input.value = ''
+                        login_error_label.text = ''
+                        login_dialog.open()
+                    
+                    ui.button('Login', on_click=open_login).props('flat dense color=primary')
         
-        ui.button(icon='person_add', on_click=show_add_user_dialog).props('flat dense round color=primary').tooltip('Add User to Project')
+        # User Visibility Filter dropdown (works for both Git and Supabase)
+        def get_all_project_users():
+            """Get all users - from local files for Git, from project_members for Supabase."""
+            if is_supabase and hasattr(backend, 'get_project_members'):
+                members = backend.get_project_members()
+                # Return list of usernames for display (or IDs if no username)
+                return [(m['id'], m['username'] or m['id'][:8]) for m in members]
+            else:
+                users = get_all_users(project_data_dir)
+                return [(u, u) for u in users]  # For local, id and name are the same
         
-        # User Visibility Filter dropdown
+        def get_visible_project_users():
+            """Get visible users (not hidden) - respects hidden_users for both backends."""
+            all_u = get_all_project_users()
+            hidden_u = get_hidden_users()
+            # Filter out hidden users (check both id and display name)
+            return [(uid, name) for uid, name in all_u if uid not in hidden_u and name not in hidden_u]
+        
         def build_user_filter_options():
             """Build options for user visibility filter with colored labels."""
-            all_u = get_all_users(project_data_dir)
-            visible_u = get_visible_users(project_data_dir)
+            all_u = get_all_project_users()
+            visible_u = get_visible_project_users()
+            visible_names = [n for _, n in visible_u]
             hidden_u = get_hidden_users()
             options = []
-            for u in all_u:
-                is_hidden = u in hidden_u
-                color = '#808080' if is_hidden else get_user_color(u, visible_u, project_data_dir)
-                options.append({'label': u, 'value': u, 'color': color, 'hidden': is_hidden})
+            for user_id, display_name in all_u:
+                is_hidden = user_id in hidden_u or display_name in hidden_u
+                color = '#808080' if is_hidden else get_user_color(display_name, visible_names, project_data_dir)
+                options.append({'label': display_name, 'value': user_id, 'color': color, 'hidden': is_hidden})
             return options
         
         # Custom filter dropdown using expansion
@@ -1240,8 +1513,9 @@ def main_page():
             
             def rebuild_filter_ui():
                 filter_container.clear()
-                all_u = get_all_users(project_data_dir)
-                visible_u = get_visible_users(project_data_dir)
+                all_u = get_all_project_users()
+                visible_u = get_visible_project_users()
+                visible_names = [n for _, n in visible_u]
                 hidden_u = get_hidden_users()
                 
                 if not all_u:
@@ -1250,29 +1524,30 @@ def main_page():
                     return
                 
                 with filter_container:
-                    for u in all_u:
-                        is_hidden = u in hidden_u
-                        color = '#808080' if is_hidden else get_user_color(u, visible_u, project_data_dir)
+                    for user_id, display_name in all_u:
+                        is_hidden = user_id in hidden_u or display_name in hidden_u
+                        color = '#808080' if is_hidden else get_user_color(display_name, visible_names, project_data_dir)
                         
-                        def make_toggle_handler(user_id):
+                        def make_toggle_handler(uid):
                             def handler():
-                                toggle_user_visibility(user_id)
+                                toggle_user_visibility(uid)
                                 rebuild_filter_ui()
                                 refresh_chart_ui()
                             return handler
                         
-                        with ui.item(on_click=make_toggle_handler(u)).classes('cursor-pointer'):
+                        with ui.item(on_click=make_toggle_handler(user_id)).classes('cursor-pointer'):
                             with ui.item_section().props('avatar'):
                                 ui.icon('visibility' if not is_hidden else 'visibility_off').style(f'color: {color}')
                             with ui.item_section():
-                                ui.label(u).style(f'color: {color}')
+                                ui.label(display_name).style(f'color: {color}')
             
             rebuild_filter_ui()
         
-        # Git Push Button (Context sensitive)
-        with ui.button(on_click=do_git_push).props('flat dense color=accent icon=cloud_upload').classes('hidden') as btn:
-            btn.tooltip('Push local changes')
-            git_btn_ref['btn'] = btn
+        # Git Push Button (Git backend only)
+        if not is_supabase:
+            with ui.button(on_click=do_git_push).props('flat dense color=accent icon=cloud_upload').classes('hidden') as btn:
+                btn.tooltip('Push local changes')
+                git_btn_ref['btn'] = btn
 
         # --- Global Controls ---
         ui.separator().props('vertical')
@@ -1318,6 +1593,157 @@ def main_page():
         with ui.element('div').classes('w-full h-full flex flex-col gap-4'):
             state['details_container'] = ui.column().classes('w-full gap-3')
             # Empty init
+
+
+# OAuth callback route - handles redirect from GitHub/Google
+@ui.page('/auth/callback')
+async def auth_callback():
+    """Handle OAuth callback from Supabase."""
+    from nicegui import app
+    from starlette.requests import Request
+    
+    # Supabase sends tokens as URL hash fragments, which aren't accessible server-side
+    # We need client-side JS to extract them and send to server
+    ui.add_head_html('''
+        <script>
+            (function() {
+                // Parse hash fragment for tokens
+                const hash = window.location.hash.substring(1);
+                const params = new URLSearchParams(hash);
+                const accessToken = params.get('access_token');
+                const refreshToken = params.get('refresh_token');
+                
+                if (accessToken) {
+                    // Send tokens to Python backend via query params redirect
+                    window.location.href = '/auth/complete?access_token=' + encodeURIComponent(accessToken) + 
+                        '&refresh_token=' + encodeURIComponent(refreshToken || '');
+                } else {
+                    // Check if error
+                    const error = params.get('error_description') || params.get('error');
+                    if (error) {
+                        window.location.href = '/?auth_error=' + encodeURIComponent(error);
+                    } else {
+                        // No tokens, just redirect home
+                        window.location.href = '/';
+                    }
+                }
+            })();
+        </script>
+    ''')
+    
+    with ui.card().classes('absolute-center'):
+        ui.spinner('dots', size='xl')
+        ui.label('Completing login...').classes('mt-4')
+
+
+@ui.page('/auth/complete')
+async def auth_complete(access_token: str = '', refresh_token: str = ''):
+    """Complete OAuth by setting session from tokens."""
+    if SESSION_MANAGER and access_token:
+        result = SESSION_MANAGER.handle_oauth_callback(access_token, refresh_token)
+        if result['success']:
+            ui.notify(f"Welcome, {result['user'].get('username', 'User')}!", type='positive')
+        else:
+            ui.notify(f"Login failed: {result.get('error', 'Unknown error')}", type='negative')
+    
+    # Redirect to home
+    ui.navigate.to('/')
+
+
+@ui.page('/project/{slug}')
+def cloud_project_page(slug: str):
+    """
+    URL-based access to projects via slug.
+    
+    Slugs use underscores instead of spaces (e.g., /project/My_Research_Project).
+    This route handles both local and cloud (Supabase) projects.
+    """
+    import os
+    from pathlib import Path
+    from src.paths import get_db_dir
+    
+    ui.dark_mode().enable()
+    ui.query('body').style('margin: 0; padding: 0; overflow: hidden;')
+    
+    # Convert slug to folder name - try both underscore version and space version
+    # Priority: exact match with slug, then try with spaces
+    db_dir = get_db_dir()
+    
+    # Check for exact match first (folder name with underscores)
+    local_project_path = db_dir / slug
+    project_name = slug
+    
+    # If not found, try with spaces (legacy folder names)
+    if not local_project_path.exists():
+        display_name = slug_to_display_name(slug)  # underscores -> spaces
+        alt_path = db_dir / display_name
+        if alt_path.exists():
+            local_project_path = alt_path
+            project_name = display_name
+    
+    # Store the project name (folder name) in session
+    app.storage.user['active_project'] = project_name
+    app.storage.user['cloud_project_slug'] = slug
+    
+    if local_project_path.exists():
+        # Local folder exists - render the main page content
+        # Set flag to prevent redirect loop
+        app.storage.user['_skip_redirect'] = True
+        main_page()
+        return
+    
+    # No local folder - create a minimal config and redirect
+    # The project exists only in Supabase
+    try:
+        # Create minimal local folder for cloud project
+        local_project_path.mkdir(parents=True, exist_ok=True)
+        
+        # Create config.json pointing to Supabase
+        config = {
+            "storage_backend": "supabase",
+            "supabase_project_slug": slug,
+            "is_cloud_only": True
+        }
+        config_path = local_project_path / "config.json"
+        import json
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        # Create empty directories expected by the app
+        (local_project_path / "data").mkdir(exist_ok=True)
+        (local_project_path / "nodes").mkdir(exist_ok=True)
+        (local_project_path / "node_types").mkdir(exist_ok=True)
+        
+        # Copy default node types if they exist
+        import shutil
+        from src.paths import get_root_dir
+        try:
+            default_node_types = get_root_dir() / "node_types"
+            if default_node_types.exists():
+                shutil.copytree(default_node_types, local_project_path / "node_types", dirs_exist_ok=True)
+                print(f"[cloud_project] Copied default node types")
+        except Exception as e:
+            print(f"[cloud_project] Could not copy default node types: {e}")
+        
+        print(f"[cloud_project] Created local config for cloud project: {slug}")
+        
+        # Render main page directly (folder now exists)
+        # Set flag to prevent redirect loop
+        app.storage.user['_skip_redirect'] = True
+        main_page()
+        return
+        
+    except Exception as e:
+        print(f"[cloud_project] Error setting up cloud project: {e}")
+        
+        with ui.column().classes('fixed inset-0 flex items-center justify-center bg-slate-900'):
+            with ui.card().classes('w-96 p-8'):
+                ui.icon('cloud_off', size='xl').classes('text-red-500 mb-4')
+                ui.label('Could Not Load Project').classes('text-2xl font-bold text-white')
+                ui.label(f'Project "{slug}" could not be loaded.').classes('text-gray-400 mb-4')
+                ui.label(str(e)).classes('text-red-400 text-sm mb-4')
+                
+                ui.button('Go Home', on_click=lambda: ui.navigate.to('/')).props('color=primary')
 
 
 if __name__ in {"__main__", "__mp_main__"}:

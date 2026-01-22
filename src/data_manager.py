@@ -1,250 +1,182 @@
-import json
+"""
+Data Manager for PRISM.
+
+Provides a high-level interface for graph operations, delegating
+actual storage to a StorageBackend implementation (Git or Supabase).
+
+This is the main interface used by the application - it handles:
+- Graph composition (joining nodes with user votes)
+- Node creation with automatic user voting
+- Encumbrance checks (shared data editing rules)
+- Legacy compatibility
+"""
+
 import logging
+import uuid as uuid_module
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-import uuid
+from typing import Dict, Any, List, Optional, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.storage.protocol import StorageBackend
 
 logger = logging.getLogger(__name__)
 
+
 class DataManager:
     """
-    Manages global graph structure and per-user state files.
+    High-level data manager that delegates to a storage backend.
     
-    Structure:
-    - db/nodes/*: Source of truth for Nodes (UUID, Label, Parent).
-    - db/data/{user}.json: User state (UUID -> {Interested, Metadata}).
-    
-    The 'get_graph' method performs a join between global structure and user files.
+    This class provides:
+    - Graph composition (nodes + user votes)
+    - Business logic for node creation/updates
+    - Encumbrance checks for shared data editing rules
+    - Backward compatibility with legacy code
     """
 
-    def __init__(self, data_dir: str = "db/data"):
-        self.data_dir = Path(data_dir)
-        self.nodes_dir = self.data_dir.parent / "nodes"
+    def __init__(
+        self, 
+        data_dir: str = "db/data",
+        backend: Optional["StorageBackend"] = None,
+        project_path: Optional[str] = None
+    ):
+        """
+        Initialize DataManager.
         
-        # Ensure directories exist
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.nodes_dir.mkdir(parents=True, exist_ok=True)
+        Args:
+            data_dir: Legacy parameter - path to data directory
+            backend: StorageBackend instance to delegate to
+            project_path: Path to project folder (used to create default backend)
+        """
+        self._backend = backend
         
-    # --- File I/O Helpers ---
-
+        # Legacy compatibility: if no backend provided, create GitBackend
+        if self._backend is None:
+            from src.storage.git_backend import GitBackend
+            
+            # Determine project path from data_dir
+            if project_path:
+                proj_path = project_path
+            else:
+                # data_dir is typically "db/{project}/data"
+                data_path = Path(data_dir)
+                proj_path = str(data_path.parent)
+            
+            self._backend = GitBackend(project_path=proj_path)
+        
+        # Expose some backend properties for legacy compatibility
+        self.data_dir = Path(data_dir) if data_dir else None
+        self.nodes_dir = self.data_dir.parent / "nodes" if self.data_dir else None
+    
+    @property
+    def backend(self) -> "StorageBackend":
+        """Get the underlying storage backend."""
+        return self._backend
+    
+    @property
+    def backend_type(self) -> str:
+        """Get the backend type ('git' or 'supabase')."""
+        return self._backend.backend_type
+    
+    @property
+    def is_read_only(self) -> bool:
+        """Check if the current session is read-only."""
+        return self._backend.is_read_only
+    
+    @property
+    def supports_realtime(self) -> bool:
+        """Check if the backend supports real-time sync."""
+        return self._backend.supports_realtime
+    
+    # --- Legacy File I/O Compatibility ---
+    
     def _load_global(self) -> Dict[str, Any]:
-        """
-        Load the global graph structure.
-        Nodes are loaded from individual files in db/nodes/.
-        Auto-migrates nodes missing node_type field.
-        """
-        # Load nodes from individual files
-        nodes = {}
-        for node_file in self.nodes_dir.glob("*.json"):
-            try:
-                with open(node_file, "r", encoding="utf-8") as f:
-                    node_data = json.load(f)
-                    node_id = node_data.get("id", node_file.stem)
-                    
-                    # Auto-migrate: add node_type if missing
-                    if "node_type" not in node_data:
-                        node_data["node_type"] = "default"
-                        self._save_node(node_id, node_data)
-                        logger.info(f"Migrated node {node_id}: added node_type=default")
-                    
-                    nodes[node_id] = node_data
-            except Exception as e:
-                logger.warning(f"Failed to load node file {node_file}: {e}")
-        
-        return {"nodes": nodes}
-
-    def _save_global(self, data: Dict[str, Any]) -> None:
-        """
-        Save the global graph structure.
-        Nodes are saved to individual files in db/nodes/.
-        """
-        nodes = data.get("nodes", {})
-        
-        # Save each node to its own file
-        for node_id, node_data in nodes.items():
-            self._save_node(node_id, node_data)
+        """Legacy method - load all nodes."""
+        return {"nodes": self._backend.load_nodes()}
     
     def _save_node(self, node_id: str, node_data: Dict[str, Any]) -> None:
-        """Save a single node to its individual file."""
-        node_path = self.nodes_dir / f"{node_id}.json"
-        with open(node_path, "w", encoding="utf-8") as f:
-            json.dump(node_data, f, indent=2, ensure_ascii=False)
+        """Legacy method - save a single node."""
+        self._backend.save_node(node_id, node_data)
     
     def _delete_node_file(self, node_id: str) -> None:
-        """Delete a node's individual file."""
-        node_path = self.nodes_dir / f"{node_id}.json"
-        if node_path.exists():
-            node_path.unlink()
-
+        """Legacy method - delete a node file."""
+        self._backend.delete_node(node_id)
+    
     def load_user(self, user_id: str) -> Dict[str, Any]:
-        """
-        Load user file. Returns dict with 'nodes' as a Dictionary (UUID->State).
-        The user_id field is always set to match the requested user_id (filename).
-        """
-        path = self.data_dir / f"{user_id}.json"
-        schema = {"user_id": user_id, "nodes": {}}
-        
-        if not path.exists():
-            # Init empty file if new user
-            self.save_user(schema)
-            return schema
-            
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # CRITICAL: Ensure user_id matches the filename, not what's stored inside
-                # This prevents bugs when files are copied/renamed
-                data["user_id"] = user_id
-                # Helper: If 'nodes' is a list (legacy leftover), handle gracefully-ish
-                if isinstance(data.get("nodes"), list):
-                    # We can't easily auto-fix on read without logic, so let's assume
-                    # the dict is the source of truth, or return empty if corrupted.
-                    data["nodes"] = {} 
-                return data
-        except Exception:
-            return schema
-
+        """Load user data."""
+        return self._backend.load_user(user_id)
+    
     def save_user(self, data: Dict[str, Any]) -> None:
-        """Save user data to file."""
-        user_id = data.get("user_id")
-        if not user_id:
-            raise ValueError("User data missing user_id")
-        
-        path = self.data_dir / f"{user_id}.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
+        """Save user data."""
+        self._backend.save_user(data)
+    
     def list_users(self) -> List[str]:
-        """Return list of user names based on files."""
-        return [f.stem for f in self.data_dir.glob("*.json")]
-
+        """Return list of user names."""
+        return self._backend.list_users()
+    
+    # --- Core Graph Logic ---
+    
+    def get_graph(self) -> Dict[str, Any]:
+        """
+        Get the full graph with all nodes and edges, including vote aggregation.
+        
+        Returns:
+            Dict with 'nodes' (list) and 'edges' (list)
+        """
+        return self._backend.get_graph()
+    
     def cleanup_orphan_nodes(self) -> int:
         """
         Remove nodes that have zero votes from any user.
         
-        A node is considered an orphan if no user has an entry for it
-        (neither interested nor rejected).
-        
         Returns:
             Number of nodes removed.
         """
-        g_data = self._load_global()
-        g_nodes = g_data.get("nodes", {})
+        if hasattr(self._backend, 'cleanup_orphan_nodes'):
+            return self._backend.cleanup_orphan_nodes()
         
-        if not g_nodes:
+        # Fallback implementation
+        nodes = self._backend.load_nodes()
+        if not nodes:
             return 0
         
-        users = self.list_users()
+        users = self._backend.list_users()
         if not users:
             return 0
         
-        # Collect all node IDs that have at least one user vote
         voted_nodes = set()
         for user_id in users:
-            user_data = self.load_user(user_id)
-            user_nodes = user_data.get("nodes", {})
-            voted_nodes.update(user_nodes.keys())
+            user_data = self._backend.load_user(user_id)
+            voted_nodes.update(user_data.get("nodes", {}).keys())
         
-        # Find orphans (nodes with no votes)
-        orphan_ids = [nid for nid in g_nodes.keys() if nid not in voted_nodes]
+        orphan_ids = [nid for nid in nodes.keys() if nid not in voted_nodes]
         
-        if not orphan_ids:
-            return 0
-        
-        # Remove orphans - delete individual node files
         for nid in orphan_ids:
-            self._delete_node_file(nid)
-            del g_nodes[nid]
+            self._backend.delete_node(nid)
             logger.info(f"Removed orphan node: {nid}")
         
-        # Also update parent_id references for any nodes that pointed to removed nodes
-        for nid, node in g_nodes.items():
+        # Update parent references
+        remaining_nodes = self._backend.load_nodes()
+        for nid, node in remaining_nodes.items():
             if node.get("parent_id") in orphan_ids:
                 node["parent_id"] = None
-                self._save_node(nid, node)  # Save updated parent reference
+                self._backend.save_node(nid, node)
         
-        # Save updated metadata (orphan removal doesn't need full _save_global)
         return len(orphan_ids)
-
-    # --- Core Graph Logic ---
-
-    def get_graph(self) -> Dict[str, Any]:
-        """
-        Aggregates global structure with all user states.
-        Returns format compatible with UI:
-        {
-            'nodes': [{id, label, parent_id, interested_users, rejected_users, metadata...}, ...],
-            'edges': [{source, target}, ...]
-        }
-        """
-        g_data = self._load_global()
-        g_nodes = g_data.get("nodes", {}) # Dict: uuid -> {id, label, parent_id}
-        
-        users = self.list_users()
-        user_states = {u: self.load_user(u).get("nodes", {}) for u in users}
-        
-        result_nodes = []
-        
-        for nid, g_node in g_nodes.items():
-            # Create the enriched node object
-            # We copy g_node to avoid mutating the cache
-            node_out = dict(g_node)
-            
-            # Ensure description exists for backward compatibility
-            if 'description' not in node_out:
-                node_out['description'] = ""
-            
-            interested = []
-            rejected = []
-            
-            # Metadata merge strategy: First user with content wins, or empty.
-            combined_metadata = ""
-            metadata_by_user = {}
-            
-            for u in users:
-                u_node = user_states[u].get(nid)
-                if u_node:
-                    # Check explicit vote state
-                    # interested: True = accepted, False = rejected, absent = pending/unsure
-                    if u_node.get("interested") is True:
-                        interested.append(u)
-                    elif u_node.get("interested") is False:
-                        rejected.append(u)
-                    # If 'interested' key is absent, user is pending (may have notes but no vote)
-                    
-                    # Capture metadata if present
-                    if u_node.get("metadata"):
-                        # Record per-user metadata for potential attribution
-                        metadata_by_user[u] = u_node.get("metadata")
-                        # Preserve legacy "first wins" behavior for combined field
-                        if not combined_metadata:
-                            combined_metadata = u_node.get("metadata")
-                else:
-                    # No record for this user = pending (haven't interacted at all)
-                    pass
-            
-            node_out['interested_users'] = interested
-            node_out['rejected_users'] = rejected
-            node_out['metadata'] = combined_metadata
-            node_out['metadata_by_user'] = metadata_by_user
-            
-            result_nodes.append(node_out)
-
-        # Build Edges
-        edges = []
-        for n in result_nodes:
-            pid = n.get('parent_id')
-            if pid and pid in g_nodes:
-                 edges.append({'source': pid, 'target': n['id']})
-                 
-        return {'nodes': result_nodes, 'edges': edges}
-
+    
     # --- Write Operations ---
-
-    def add_node(self, label: str, parent_id: str = None, users: List[str] = None, interested: bool = True, description: str = "", node_type: str = "default", custom_fields: Dict[str, Any] = None) -> Dict[str, Any]:
+    
+    def add_node(
+        self, 
+        label: str, 
+        parent_id: str = None, 
+        users: List[str] = None, 
+        interested: bool = True, 
+        description: str = "", 
+        node_type: str = "default", 
+        custom_fields: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
-        Adds node to Global graph.
-        Optionally initializes user states (e.g. setting them as interested).
+        Add a new node to the graph.
         
         Args:
             label: Node title
@@ -252,13 +184,18 @@ class DataManager:
             users: List of user IDs to set interest for
             interested: Whether users are interested (True) or rejected (False)
             description: Node description (markdown)
-            node_type: Node type identifier (default: "default")
-            custom_fields: Dict of custom field values defined by the node type
+            node_type: Node type identifier
+            custom_fields: Dict of custom field values
+            
+        Returns:
+            The created node with vote info
         """
-        # 1. Create and save node directly to its own file
-        node_id = str(uuid.uuid4())
+        if self._backend.is_read_only:
+            raise PermissionError("Cannot add nodes in read-only mode")
         
-        new_node_global = {
+        node_id = str(uuid_module.uuid4())
+        
+        new_node = {
             "id": node_id,
             "node_type": node_type,
             "label": label,
@@ -266,178 +203,299 @@ class DataManager:
             "description": description
         }
         
-        # Add custom fields if provided
+        # Add custom fields
         if custom_fields:
+            reserved = {'id', 'parent_id', 'node_type', 'label', 'description', 'metadata'}
             for key, value in custom_fields.items():
-                # Skip reserved keys
-                if key not in ('id', 'parent_id', 'node_type', 'label', 'description', 'metadata'):
-                    new_node_global[key] = value
+                if key not in reserved:
+                    new_node[key] = value
         
-        self._save_node(node_id, new_node_global)
+        # Save node
+        self._backend.save_node(node_id, new_node)
         
-        # 2. Update Users
-        target_users = users if users else []
-        for u in target_users:
-            u_data = self.load_user(u)
-            if "nodes" not in u_data: u_data["nodes"] = {}
-            
-            # Create entry
-            u_data["nodes"][node_id] = {
-                "interested": interested,
-                "metadata": ""
-            }
-            self.save_user(u_data)
-            
-        # Return format similar to get_graph node for immediate UI use
+        # Set user votes
+        target_users = users or []
+        for user_id in target_users:
+            self._backend.set_user_node_vote(
+                user_id=user_id,
+                node_id=node_id,
+                interested=interested,
+                metadata=""
+            )
+        
+        # Return enriched node
         return {
-            **new_node_global,
+            **new_node,
             "interested_users": target_users if interested else [],
             "rejected_users": target_users if not interested else [],
-            "metadata": ""
+            "metadata": "",
+            "metadata_by_user": {}
         }
-
+    
     def update_user_node(self, user_id: str, node_id: str, **kwargs) -> None:
         """
-        Updates a specific user's state for a node (e.g. status, metadata).
+        Update a user's state for a node.
         
-        Data model:
-        - 'interested': True = accepted, False = rejected, absent = pending/unsure
-        - 'metadata': string value if notes exist, absent = no notes
-        
-        When both fields are absent, the entire node entry is removed from the user file.
+        Args:
+            user_id: User identifier
+            node_id: Node UUID
+            **kwargs: Fields to update (interested, metadata)
         """
-        u_data = self.load_user(user_id)
-        if "nodes" not in u_data: u_data["nodes"] = {}
+        if self._backend.is_read_only:
+            raise PermissionError("Cannot update in read-only mode")
         
-        # Get existing entry or start fresh
-        curr = u_data["nodes"].get(node_id, {})
+        # Handle the update
+        interested = kwargs.get("interested")
+        metadata = kwargs.get("metadata")
         
-        # Apply updates
-        if "interested" in kwargs:
-            interested_val = kwargs["interested"]
-            if interested_val is None:
-                # Remove the key (absence = pending/unsure)
-                curr.pop("interested", None)
-            else:
-                curr["interested"] = interested_val
-                
-        if "metadata" in kwargs:
-            metadata_val = kwargs["metadata"]
-            if not metadata_val or (isinstance(metadata_val, str) and metadata_val.strip() == ""):
-                # Remove empty metadata (absence = blank)
-                curr.pop("metadata", None)
-            else:
-                curr["metadata"] = metadata_val
-        
-        # If node entry is now empty (no interested, no metadata), remove it entirely
-        if not curr:
-            u_data["nodes"].pop(node_id, None)
+        if interested is None and "interested" in kwargs:
+            # Explicit None = remove vote
+            self._backend.remove_user_node_vote(user_id, node_id)
         else:
-            u_data["nodes"][node_id] = curr
-            
-        self.save_user(u_data)
-
+            self._backend.set_user_node_vote(
+                user_id=user_id,
+                node_id=node_id,
+                interested=interested,
+                metadata=metadata
+            )
+    
     def update_shared_node(self, node_id: str, **kwargs) -> None:
         """
-        Updates global structure (Label, Parent, Description, node_type, custom fields).
-        """
-        # Reserved keys that go to user files, not node files
-        user_keys = {'interested', 'metadata'}
+        Update shared node properties (label, parent, description, etc.).
         
-        g_data = self._load_global()
-        if node_id in g_data["nodes"]:
-            node = g_data["nodes"][node_id]
-            changed = False
-            
-            for key, value in kwargs.items():
-                # Skip user-specific keys
-                if key in user_keys:
-                    continue
-                # Update the node
+        Args:
+            node_id: Node UUID
+            **kwargs: Fields to update
+        """
+        if self._backend.is_read_only:
+            raise PermissionError("Cannot update in read-only mode")
+        
+        nodes = self._backend.load_nodes()
+        if node_id not in nodes:
+            logger.warning(f"Node {node_id} not found for update")
+            return
+        
+        node = nodes[node_id]
+        user_keys = {'interested', 'metadata'}
+        changed = False
+        
+        for key, value in kwargs.items():
+            if key not in user_keys:
                 node[key] = value
                 changed = True
-            
-            if changed:
-                self._save_node(node_id, node)
-
+        
+        if changed:
+            self._backend.save_node(node_id, node)
+    
     def remove_user_node(self, user_id: str, node_id: str) -> None:
-        """
-        Removes user's specific state for a node (Reset to Pending).
-        Does NOT delete the node from Global.
-        """
-        u_data = self.load_user(user_id)
-        if "nodes" in u_data and node_id in u_data["nodes"]:
-            del u_data["nodes"][node_id]
-            self.save_user(u_data)
-
+        """Remove a user's vote/state for a node (reset to pending)."""
+        if self._backend.is_read_only:
+            raise PermissionError("Cannot remove in read-only mode")
+        
+        self._backend.remove_user_node_vote(user_id, node_id)
+    
     def update_node(self, node_id: str, **kwargs) -> None:
         """
-        Legacy/Convenience method. Routes updates to Global or User files based on keys.
-        WARNING: If updating status/metadata without a specific user context, 
-        this might be ambiguous.
-        Legacy behavior was 'apply to all'. We will try to preserve that if possible.
+        Legacy method - routes updates to shared or user files.
+        
+        WARNING: If updating status/metadata without user context,
+        applies to all users (legacy behavior).
         """
+        if self._backend.is_read_only:
+            raise PermissionError("Cannot update in read-only mode")
+        
         # Shared props
-        shared_keys = ['label', 'parent_id']
+        shared_keys = ['label', 'parent_id', 'description', 'node_type']
         if any(k in kwargs for k in shared_keys):
             self.update_shared_node(node_id, **kwargs)
-            
-        # User props (interested, metadata)
-        # Check for legacy 'status' -> 'interested'
+        
+        # Handle legacy 'status' -> 'interested'
         if 'status' in kwargs:
             val = kwargs.pop('status')
             kwargs['interested'] = (val == 'accepted')
-            
+        
+        # User props - apply to all users (legacy behavior)
         user_keys = ['interested', 'metadata']
         if any(k in kwargs for k in user_keys):
-             for u in self.list_users():
-                # We update all users, mimicking old 'broadcast' behavior
-                self.update_user_node(u, node_id, **kwargs)
-
+            for user_id in self._backend.list_users():
+                self.update_user_node(user_id, node_id, **kwargs)
+    
     def get_user_node(self, user_id: str, node_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Returns the raw user state dict or None.
-        Enriched with global data for convenience? 
-        Legacy returned enriched.
-        """
-        u_data = self.load_user(user_id)
-        u_node = u_data.get("nodes", {}).get(node_id)
-        
-        if not u_node:
+        """Get a node enriched with user's vote data."""
+        user_vote = self._backend.get_user_node_vote(user_id, node_id)
+        if not user_vote:
             return None
+        
+        nodes = self._backend.load_nodes()
+        node = nodes.get(node_id)
+        if node:
+            return {**node, **user_vote}
+        return user_vote
+    
+    def delete_node(self, node_id: str, active_user_id: str = None) -> Dict[str, Any]:
+        """
+        Delete a node, respecting shared data editing rules.
+        
+        Args:
+            node_id: Node UUID to delete
+            active_user_id: Current user (for encumbrance check)
             
-        # Enrich with global lookup
-        g_data = self._load_global()
-        g_node = g_data["nodes"].get(node_id)
-        if g_node:
-            # Merge: Global props + User props
-            return {**g_node, **u_node}
-        return u_node
-
+        Returns:
+            Dict with 'success' and 'message', optionally 'affected_users'
+        """
+        if self._backend.is_read_only:
+            return {"success": False, "message": "Cannot delete in read-only mode"}
+        
+        # Check encumbrance if user provided
+        if active_user_id:
+            external_users = self._backend.get_node_external_users(node_id, active_user_id)
+            if external_users:
+                user_names = [u["user_id"] for u in external_users]
+                return {
+                    "success": False,
+                    "message": "Cannot delete: other users have data on this node",
+                    "affected_users": external_users,
+                    "affected_user_names": user_names
+                }
+        
+        # Check for child nodes with external data
+        nodes = self._backend.load_nodes()
+        child_ids = [nid for nid, n in nodes.items() if n.get("parent_id") == node_id]
+        
+        for child_id in child_ids:
+            if active_user_id and self._backend.is_node_encumbered(child_id, active_user_id):
+                return {
+                    "success": False,
+                    "message": "Cannot delete: child nodes have external user data"
+                }
+        
+        # Delete the node
+        self._backend.delete_node(node_id)
+        
+        # Remove all user votes for this node
+        for user_id in self._backend.list_users():
+            self._backend.remove_user_node_vote(user_id, node_id)
+        
+        # Update children to become orphans
+        for child_id in child_ids:
+            child_node = nodes[child_id]
+            child_node["parent_id"] = None
+            self._backend.save_node(child_id, child_node)
+        
+        return {"success": True, "message": "Node deleted"}
+    
+    # --- Encumbrance Checks ---
+    
+    def get_node_external_users(self, node_id: str, active_user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get list of users (other than active user) who have data on this node.
+        
+        Returns:
+            List of dicts with user_id, has_vote, interested, has_metadata
+        """
+        return self._backend.get_node_external_users(node_id, active_user_id)
+    
+    def is_node_encumbered(self, node_id: str, active_user_id: str) -> bool:
+        """Check if a node has external user data."""
+        return self._backend.is_node_encumbered(node_id, active_user_id)
+    
+    def check_edit_permission(
+        self, 
+        node_id: str, 
+        active_user_id: str,
+        operation: str = "edit"
+    ) -> Dict[str, Any]:
+        """
+        Check if an edit operation is allowed and get affected users.
+        
+        Args:
+            node_id: Node UUID
+            active_user_id: Current user
+            operation: 'edit' or 'delete'
+            
+        Returns:
+            Dict with:
+            - allowed: bool
+            - requires_confirmation: bool
+            - affected_users: List of affected user info
+            - message: str
+        """
+        external_users = self._backend.get_node_external_users(node_id, active_user_id)
+        
+        if not external_users:
+            return {
+                "allowed": True,
+                "requires_confirmation": False,
+                "affected_users": [],
+                "message": "No other users have data on this node"
+            }
+        
+        if operation == "delete":
+            return {
+                "allowed": False,
+                "requires_confirmation": False,
+                "affected_users": external_users,
+                "message": f"Cannot delete: {len(external_users)} other user(s) have data on this node"
+            }
+        
+        # For edits, allow with confirmation
+        user_names = [u["user_id"] for u in external_users]
+        return {
+            "allowed": True,
+            "requires_confirmation": True,
+            "affected_users": external_users,
+            "message": f"This change will affect: {', '.join(user_names)}"
+        }
+    
+    # --- Sync Operations ---
+    
+    def sync(self) -> Dict[str, Any]:
+        """Pull latest changes from remote."""
+        return self._backend.sync()
+    
+    def push(self) -> Dict[str, Any]:
+        """Push local changes to remote."""
+        return self._backend.push()
+    
+    def has_unpushed_changes(self) -> bool:
+        """Check for unpushed changes."""
+        return self._backend.has_unpushed_changes()
+    
+    # --- Real-time Subscriptions ---
+    
+    def subscribe(self, on_node_change=None, on_vote_change=None) -> None:
+        """Subscribe to real-time updates."""
+        self._backend.subscribe(on_node_change, on_vote_change)
+    
+    def unsubscribe(self) -> None:
+        """Unsubscribe from real-time updates."""
+        self._backend.unsubscribe()
+    
+    # --- Demo Data ---
+    
     def seed_demo_data(self):
         """Populate with initial data if empty."""
-        g_nodes = self._load_global().get("nodes", {})
-        if not g_nodes:
-            # Get existing users or create a default user
-            existing_users = self.list_users()
-            if not existing_users:
-                # Create a default user if none exist
-                self.load_user("User1")  # creates file
-                existing_users = ["User1"]
-                
-            print("Seeding demo data...")
-            root = self.add_node("Thesis Idea", users=existing_users)
-            
-            root_id = root['id']
-            # Update root metadata for all
-            self.update_node(root_id, metadata='# The Central Thesis\n\nThis is the core concept we are exploring.')
-
-            # Create child nodes - assign to first user if only one exists
-            first_user = existing_users[0] if existing_users else None
-            if first_user:
-                n1 = self.add_node("Serious Games", parent_id=root_id, users=[first_user])
-                n2 = self.add_node("Human-Computer Interaction", parent_id=root_id, users=[first_user])
-                n3 = self.add_node("ML for Creativity", parent_id=root_id, users=[first_user])
-                
-                self.add_node("Generative Art Tools", parent_id=n3['id'], users=[first_user])
-
+        nodes = self._backend.load_nodes()
+        if nodes:
+            return  # Already has data
+        
+        existing_users = self._backend.list_users()
+        if not existing_users:
+            self._backend.create_user("User1")
+            existing_users = ["User1"]
+        
+        logger.info("Seeding demo data...")
+        root = self.add_node("Thesis Idea", users=existing_users)
+        root_id = root['id']
+        
+        self.update_node(
+            root_id, 
+            metadata='# The Central Thesis\n\nThis is the core concept we are exploring.'
+        )
+        
+        first_user = existing_users[0]
+        n1 = self.add_node("Serious Games", parent_id=root_id, users=[first_user])
+        n2 = self.add_node("Human-Computer Interaction", parent_id=root_id, users=[first_user])
+        n3 = self.add_node("ML for Creativity", parent_id=root_id, users=[first_user])
+        
+        self.add_node("Generative Art Tools", parent_id=n3['id'], users=[first_user])
