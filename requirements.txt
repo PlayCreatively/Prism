@@ -3,3 +3,4 @@ networkx
 pytest
 openai
 python-dotenv
+supabase

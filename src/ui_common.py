@@ -86,12 +86,21 @@ def render_other_users_notes(
     node_id: str,
     active_user: str,
     data_manager,
-    users: list
+    users: list,
+    user_map: dict = None,
+    is_supabase: bool = False
 ):
     """
     Renders notes from other users (not the active user) for a given node.
     Colors the header/border green for accepted users, red for rejected users and unsure for unvoted users.
+    
+    Args:
+        user_map: Optional dict mapping user IDs to display names (for Supabase)
+        is_supabase: Whether using Supabase backend
     """
+    if user_map is None:
+        user_map = {}
+    
     other_users = [u for u in users if u != active_user]
     
     has_any_notes = False
@@ -107,6 +116,12 @@ def render_other_users_notes(
             continue
         
         has_any_notes = True
+        
+        # Get display name for user (handle both UUID and username)
+        if is_supabase and user in user_map:
+            user_display = user_map[user]
+        else:
+            user_display = user
         
         # Determine vote status for coloring
         is_interested = user_node.get('interested', True)
@@ -133,7 +148,7 @@ def render_other_users_notes(
         with ui.element('div').classes(f'w-full rounded border-l-4 {border_color} {bg_color} p-2 mt-2'):
             with ui.row().classes('items-center gap-2'):
                 ui.icon(icon).classes(f'{text_color}')
-                ui.label(f"{user}'s notes").classes(f'text-xs font-bold {text_color}')
+                ui.label(f"{user_display}'s notes").classes(f'text-xs font-bold {text_color}')
             ui.markdown(metadata).classes('text-sm text-gray-300 mt-1 [&_h1]:text-lg [&_h1]:mt-0 [&_h1]:pt-0 [&_h1]:mb-2 [&_h1]:font-bold')
     
     if not has_any_notes:
